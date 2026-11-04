@@ -233,7 +233,7 @@ wss.on('connection', (ws, payload) => {
     if (!handler) {
       return send(ws, 'error', { message: `tipo desconocido: ${msg.type}` });
     }
-    handler(ws, msg.data || {}, { userId, username });
+    handler(ws, msg.data || {}, { userId, username }, msg);
   });
 
   ws.on('close', () => {
@@ -262,6 +262,37 @@ const handlers = {
       username: p.username
     }));
     ws.send(JSON.stringify({ type: 'players_update', players: list }));
+  },
+
+  // ── Intención de movimiento ───────────────────────────────────────────────
+  // { type: 'intent', intent: { dir: { x: -1|0|1, y: -1|0|1 } } }
+  // Aquí SOLO se guarda la intención. Quien mueve al jugador es el game loop;
+  // si moviéramos aquí, la velocidad dependería de cuántos mensajes manda el cliente.
+  // Tampoco se hace broadcast aquí: eso ocurre una vez por tick.
+  intent(ws, data, { userId }, msg) {
+    const p = players.get(userId);
+    if (!p || p.socket !== ws) return;
+
+    const intent = msg.intent || data.intent;
+    const dir = intent && intent.dir;
+    if (!dir || !Number.isFinite(dir.x) || !Number.isFinite(dir.y)) return;
+
+    // Sanitizar a -1, 0, 1 — NO confiar en lo que mande el cliente ({x: 9999} no teletransporta)
+    p.intent = { x: Math.sign(dir.x), y: Math.sign(dir.y) };
+  },
+
+  // ── Extras replicados (color, mood, etc.) ─────────────────────────────────
+  // { type: 'extras_update', extras: { color: '#ff5500' } }
+  // Se guardan en el jugador y se replican a todos en el siguiente tick.
+  extras_update(ws, data, { userId }, msg) {
+    const p = players.get(userId);
+    if (!p || p.socket !== ws) return;
+
+    const extras = msg.extras || data.extras;
+    if (!extras || typeof extras !== 'object' || Array.isArray(extras)) return;
+    if (JSON.stringify(extras).length > 1024) return; // límite anti-abuso (1 KB)
+
+    p.extras = extras;
   },
 
   // ── Respuesta al auth_challenge ───────────────────────────────────────────
