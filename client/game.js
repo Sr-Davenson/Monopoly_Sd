@@ -10,7 +10,7 @@
 const originalToken   = localStorage.getItem('token');
 const currentUsername = localStorage.getItem('username') || 'Jugador';
 const defaultConfig   = window.APP_CONFIG || { COORDINATOR_WS: 'ws://localhost:5000' };
-const COORDINATOR_WS  = (localStorage.getItem('CUSTOM_COORDINATOR_WS') || defaultConfig.COORDINATOR_WS).replace(/\/+$/, '');
+const COORDINATOR_WS  = (defaultConfig.COORDINATOR_WS).replace(/\/+$/, '');
 
 let ws = null;
 let config = null;          // tablero, temáticas, economía (estático)
@@ -644,3 +644,4 @@ function connect() {
 // Para la demo de autoridad: `state` es local. Modificarlo desde DevTools solo
 // cambia esta pantalla; el próximo game_state del servidor lo sobrescribe.
 window.getGameState = () => state;
+

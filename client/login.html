@@ -56,7 +56,7 @@
     <section class="card" style="margin-top: 1.5rem; text-align: center;">
       <h2>Acceso con Google</h2>
       <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.25rem;">
-        Inicia sesión o regístrate con tu cuenta institucional o personal de Google
+        Inicia sesión o regístrate con tu cuenta de Google
       </p>
       <div id="google-btn-wrapper" class="google-btn-wrapper"></div>
       <p id="google-status-msg" style="color: var(--text-muted); font-size: 0.82rem; margin-top: 0.75rem;"></p>
@@ -80,39 +80,27 @@
         </form>
       </div>
     </div>
-
-    <!-- Panel de Configuración de Endpoints -->
-    <details class="card config-panel">
-      <summary>Configuración de Endpoints y Google Client ID (Local / Ngrok)</summary>
-      <div class="config-row">
-        <input type="text" id="cfg-auth-url" placeholder="AUTH_URL (ej. https://abc.ngrok-free.app)" />
-        <input type="text" id="cfg-ws-url" placeholder="COORDINATOR_WS (ej. wss://xyz.ngrok-free.app)" />
-      </div>
-      <div class="config-row" style="margin-top: 0.5rem;">
-        <input type="text" id="cfg-google-client-id" placeholder="GOOGLE_CLIENT_ID (ej. 12345...apps.googleusercontent.com)" />
-        <button type="button" id="save-cfg-btn" class="btn btn-secondary">Guardar Configuración</button>
-        <button type="button" id="reset-cfg-btn" class="btn btn-secondary">Restablecer</button>
-      </div>
-    </details>
   </div>
 
   <script>
-    const defaultConfig = window.APP_CONFIG || {
+    // Limpiar posibles valores antiguos guardados en localStorage para forzar uso exclusivo de .env
+    localStorage.removeItem('CUSTOM_AUTH_URL');
+    localStorage.removeItem('CUSTOM_COORDINATOR_WS');
+    localStorage.removeItem('CUSTOM_GOOGLE_CLIENT_ID');
+
+    // Configuración tomada directamente de variables de entorno (.env vía config.js)
+    const config = window.APP_CONFIG || {
       AUTH_URL: 'http://localhost:4000',
       COORDINATOR_WS: 'ws://localhost:5000',
       GOOGLE_CLIENT_ID: ''
     };
 
     function getAuthUrl() {
-      return (localStorage.getItem('CUSTOM_AUTH_URL') || defaultConfig.AUTH_URL).replace(/\/+$/, '');
-    }
-
-    function getWsUrl() {
-      return (localStorage.getItem('CUSTOM_COORDINATOR_WS') || defaultConfig.COORDINATOR_WS).replace(/\/+$/, '');
+      return (config.AUTH_URL || 'http://localhost:4000').replace(/\/+$/, '');
     }
 
     function getGoogleClientId() {
-      return (localStorage.getItem('CUSTOM_GOOGLE_CLIENT_ID') || defaultConfig.GOOGLE_CLIENT_ID || '').trim();
+      return (config.GOOGLE_CLIENT_ID || '').trim();
     }
 
     const alertBox = document.getElementById('global-alert');
@@ -133,39 +121,6 @@
       showAlert(sessionReason, 'warning');
       sessionStorage.removeItem('session_message');
     }
-
-    // Inicializar inputs de configuración
-    const cfgAuthInput = document.getElementById('cfg-auth-url');
-    const cfgWsInput = document.getElementById('cfg-ws-url');
-    const cfgGoogleInput = document.getElementById('cfg-google-client-id');
-    cfgAuthInput.value = getAuthUrl();
-    cfgWsInput.value = getWsUrl();
-    cfgGoogleInput.value = getGoogleClientId();
-
-    document.getElementById('save-cfg-btn').addEventListener('click', () => {
-      if (cfgAuthInput.value.trim()) {
-        localStorage.setItem('CUSTOM_AUTH_URL', cfgAuthInput.value.trim());
-      }
-      if (cfgWsInput.value.trim()) {
-        localStorage.setItem('CUSTOM_COORDINATOR_WS', cfgWsInput.value.trim());
-      }
-      if (cfgGoogleInput.value.trim()) {
-        localStorage.setItem('CUSTOM_GOOGLE_CLIENT_ID', cfgGoogleInput.value.trim());
-      }
-      showAlert('Configuración guardada correctamente.', 'success');
-      initGoogleSignIn();
-    });
-
-    document.getElementById('reset-cfg-btn').addEventListener('click', () => {
-      localStorage.removeItem('CUSTOM_AUTH_URL');
-      localStorage.removeItem('CUSTOM_COORDINATOR_WS');
-      localStorage.removeItem('CUSTOM_GOOGLE_CLIENT_ID');
-      cfgAuthInput.value = getAuthUrl();
-      cfgWsInput.value = getWsUrl();
-      cfgGoogleInput.value = getGoogleClientId();
-      showAlert('Configuración restablecida a los valores por defecto.', 'success');
-      initGoogleSignIn();
-    });
 
     // Solo letras, dígitos y guion bajo: evita caracteres especiales / inyecciones
     const SAFE_USERNAME_RE = /^[a-zA-Z0-9_]+$/;
@@ -255,9 +210,9 @@
       const wrapper = document.getElementById('google-btn-wrapper');
       const statusMsg = document.getElementById('google-status-msg');
 
-      if (!clientId || clientId.includes('tu_google_client_id')) {
+      if (!clientId) {
         wrapper.innerHTML = '';
-        statusMsg.textContent = 'Ingresa tu GOOGLE_CLIENT_ID en el panel de configuración inferior para habilitar el botón de Google.';
+        statusMsg.textContent = 'Configura GOOGLE_CLIENT_ID en client/.env para habilitar el botón de Google.';
         return;
       }
       statusMsg.textContent = '';
