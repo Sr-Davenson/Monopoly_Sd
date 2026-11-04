@@ -332,7 +332,59 @@ const handlers = {
   // ─────────────────────────────────────────────────────────────────────────
 };
 
+// ── Game loop (servidor autoritativo) ─────────────────────────────────────────
+// Snapshot serializable del estado (sin el socket).
+function snapshot() {
+  return Array.from(players.entries()).map(([userId, p]) => ({
+    userId,
+    username: p.username,
+    provider: p.provider,
+    x: Math.round(p.x * 100) / 100,
+    y: Math.round(p.y * 100) / 100,
+    extras: p.extras
+  }));
+}
+
+function broadcast(obj) {
+  const msg = JSON.stringify(obj);
+  for (const { socket } of players.values()) {
+    if (socket.readyState === socket.OPEN) socket.send(msg);
+  }
+}
+
+let lastTick = Date.now();
+
+function tick() {
+  const now = Date.now();
+  const dt  = (now - lastTick) / 1000; // segundos reales desde el tick anterior
+  lastTick  = now;
+
+  for (const p of players.values()) {
+    // Normalizar diagonales: sin esto, en diagonal se iría ~41% más rápido.
+    const ix  = p.intent.x;
+    const iy  = p.intent.y;
+    const mag = Math.hypot(ix, iy);
+    if (mag > 0) {
+      p.x += (ix / mag) * PLAYER_SPEED * dt;
+      p.y += (iy / mag) * PLAYER_SPEED * dt;
+    }
+
+    // Mantener dentro del mundo
+    p.x = Math.max(PLAYER_RADIUS, Math.min(WORLD_WIDTH  - PLAYER_RADIUS, p.x));
+    p.y = Math.max(PLAYER_RADIUS, Math.min(WORLD_HEIGHT - PLAYER_RADIUS, p.y));
+  }
+
+  // Un único broadcast por tick
+  if (players.size > 0) {
+    broadcast({ type: 'state', t: now, players: snapshot() });
+  }
+}
+
+setInterval(tick, TICK_MS);
+// ─────────────────────────────────────────────────────────────────────────────
+
 server.listen(PORT, () => {
   console.log(`Coordinator ${ID} (${role}) en http://localhost:${PORT} y WS en ws://localhost:${PORT}/connect`);
+  console.log(`  -> Game loop a ${TICK_RATE} Hz | Mundo ${WORLD_WIDTH}x${WORLD_HEIGHT} | Velocidad ${PLAYER_SPEED} px/s`);
   console.log(`  -> Auth challenge cada ${AUTH_CHALLENGE_INTERVAL / 1000}s, timeout de respuesta ${AUTH_CHALLENGE_TIMEOUT / 1000}s`);
 });
