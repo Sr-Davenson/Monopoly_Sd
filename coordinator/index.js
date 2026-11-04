@@ -30,6 +30,17 @@ const AUTH_CHALLENGE_INTERVAL = Number(process.env.AUTH_CHALLENGE_INTERVAL || 20
 const AUTH_CHALLENGE_TIMEOUT  = Number(process.env.AUTH_CHALLENGE_TIMEOUT  ||  5000); //  5 s
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Mundo del juego (Taller 5) ────────────────────────────────────────────────
+// El servidor es autoritativo: estas dimensiones las decide el coordinador y se
+// envían al cliente en el mensaje 'welcome' para inicializar el canvas.
+const WORLD_WIDTH   = Number(process.env.WORLD_WIDTH   || 800);
+const WORLD_HEIGHT  = Number(process.env.WORLD_HEIGHT  || 600);
+const PLAYER_RADIUS = Number(process.env.PLAYER_RADIUS || 15);
+const PLAYER_SPEED  = Number(process.env.PLAYER_SPEED  || 200); // px/seg
+const TICK_RATE     = 20;                                        // Hz
+const TICK_MS       = 1000 / TICK_RATE;
+// ─────────────────────────────────────────────────────────────────────────────
+
 if (!JWT_SECRET) {
   console.error('[ERROR] JWT_SECRET no está definida en el archivo .env');
   process.exit(1);
@@ -40,7 +51,7 @@ const role = args.role || process.env.COORDINATOR_ROLE || 'PRIMARY';
 const servers = {};
 const totalTimeouts = 0;
 
-// Map en memoria: userId -> { username, socket, connectedAt }
+// Map en memoria: userId -> { username, provider, socket, connectedAt, x, y, intent, extras }
 const players = new Map();
 
 const app = express();
@@ -119,6 +130,7 @@ server.on('upgrade', (req, socket, head) => {
 wss.on('connection', (ws, payload) => {
   const userId   = String(payload.userId);
   const username = payload.username;
+  const provider = payload.provider || 'local';
 
   // Política de pestañas duplicadas
   if (players.has(userId)) {
@@ -167,9 +179,32 @@ wss.on('connection', (ws, payload) => {
   }, AUTH_CHALLENGE_INTERVAL);
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Registrar jugador
-  players.set(userId, { username, socket: ws, connectedAt: new Date().toISOString() });
+  // Registrar jugador con su estado de juego.
+  // La posición inicial la decide el servidor (aleatoria dentro del mundo).
+  players.set(userId, {
+    username,
+    provider,
+    socket: ws,
+    connectedAt: new Date().toISOString(),
+    x: PLAYER_RADIUS + Math.random() * (WORLD_WIDTH  - 2 * PLAYER_RADIUS),
+    y: PLAYER_RADIUS + Math.random() * (WORLD_HEIGHT - 2 * PLAYER_RADIUS),
+    intent: { x: 0, y: 0 },
+    extras: {}
+  });
   console.log(`[COORDINATOR] Jugador conectado: ${username} (id: ${userId}) | Total en línea: ${players.size}`);
+
+  // Welcome enriquecido: identidad + parámetros del mundo para el canvas
+  ws.send(JSON.stringify({
+    type: 'welcome',
+    you: { userId, username, provider },
+    world: {
+      width: WORLD_WIDTH,
+      height: WORLD_HEIGHT,
+      playerRadius: PLAYER_RADIUS,
+      tickRate: TICK_RATE
+    }
+  }));
+
   broadcastPlayers();
 
   // Expiración natural del token
