@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Monopoly SD — Lobby de Jugadores</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="config.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>Lobby en Tiempo Real</h1>
+      <p>Conectado al Coordinador de Sesiones por WebSocket autenticado</p>
+    </header>
+
+    <div class="card">
+      <div class="top-bar">
+        <div class="user-badge">
+          <span class="status-dot"></span>
+          <span>Jugador actual: <strong id="current-username">...</strong></span>
+        </div>
+        <button id="logout-btn" class="btn btn-danger">Cerrar sesión</button>
+      </div>
+
+      <h2>
+        <span>Jugadores en línea</span>
+        <span class="badge" id="players-count">0 conectados</span>
+      </h2>
+
+      <ul id="players-list" class="players-list">
+        <li class="player-item">
+          <span class="text-muted">Conectando con el coordinador...</span>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    const token = localStorage.getItem('token');
+    const currentUsername = localStorage.getItem('username') || 'Jugador';
+
+    if (!token) {
+      sessionStorage.setItem('session_message', 'Debes iniciar sesión para acceder al lobby.');
+      window.location.href = 'login.html';
+    }
+
+    document.getElementById('current-username').textContent = currentUsername;
+
+    const defaultConfig = window.APP_CONFIG || {
+      AUTH_URL: 'http://localhost:4000',
+      COORDINATOR_WS: 'ws://localhost:5000'
+    };
+
+    const COORDINATOR_WS = (
+      localStorage.getItem('CUSTOM_COORDINATOR_WS') || defaultConfig.COORDINATOR_WS
+    ).replace(/\/+$/, '');
+
+    let manualLogout = false;
+    const ws = new WebSocket(`${COORDINATOR_WS}/connect?token=${encodeURIComponent(token)}`);
+
+    function renderPlayers(players) {
+      const listEl = document.getElementById('players-list');
+      const countEl = document.getElementById('players-count');
+      countEl.textContent = `${players.length} ${players.length === 1 ? 'conectado' : 'conectados'}`;
+
+      listEl.innerHTML = '';
+
+      if (players.length === 0) {
+        const emptyLi = document.createElement('li');
+        emptyLi.className = 'player-item';
+        emptyLi.textContent = 'No hay jugadores conectados';
+        listEl.appendChild(emptyLi);
+        return;
+      }
+
+      for (const p of players) {
+        const li = document.createElement('li');
+        li.className = 'player-item';
+
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'player-info';
+
+        const dot = document.createElement('span');
+        dot.className = 'status-dot';
+
+        const nameSpan = document.createElement('strong');
+        nameSpan.textContent = p.username;
+
+        infoDiv.appendChild(dot);
+        infoDiv.appendChild(nameSpan);
+
+        if (p.username === currentUsername) {
+          const youBadge = document.createElement('span');
+          youBadge.className = 'badge';
+          youBadge.textContent = 'Tú';
+          infoDiv.appendChild(youBadge);
+        }
+
+        const idSpan = document.createElement('span');
+        idSpan.style.color = 'var(--text-muted)';
+        idSpan.style.fontSize = '0.82rem';
+        idSpan.textContent = `ID: ${p.userId}`;
+
+        li.appendChild(infoDiv);
+        li.appendChild(idSpan);
+        listEl.appendChild(li);
+      }
+    }
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'players_update' && Array.isArray(msg.players)) {
+          renderPlayers(msg.players);
+        }
+      } catch (err) {
+        console.error('Error parseando mensaje WS:', err);
+      }
+    };
+
+    ws.onclose = (event) => {
+      if (manualLogout) {
+        window.location.href = 'login.html';
+        return;
+      }
+
+      let reasonMsg = 'La conexión con el coordinador se cerró inesperadamente.';
+      if (event.code === 4001 || event.reason === 'invalid token') {
+        reasonMsg = 'Sesión terminada: Token inválido o expirado (código 4001).';
+      } else if (event.code === 4002) {
+        reasonMsg = 'Tu sesión fue desconectada porque abriste el juego en otra pestaña.';
+      }
+
+      alert(reasonMsg);
+      sessionStorage.setItem('session_message', reasonMsg);
+      localStorage.removeItem('token');
+      localStorage.removeItem('username');
+      window.location.href = 'login.html';
+    };
+
+    document.getElementById('logout-btn').addEventListener('click', () => {
+      manualLogout = true;
+      localStorage.removeItem('token');
+      localStorage.removeItem('username');
+      sessionStorage.setItem('session_message', 'Has cerrado sesión correctamente.');
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close(1000, 'user logout');
+      } else {
+        window.location.href = 'login.html';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Monopoly SD — Acceso de Jugadores</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="config.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>Monopoly SD — Identidad y Sesiones</h1>
+      <p>Regístrate o inicia sesión para conectarte al Coordinador en tiempo real</p>
+    </header>
+
+    <div id="global-alert" class="alert"></div>
+
+    <div class="grid-2">
+      <!-- Formulario de Login -->
+      <section class="card">
+        <h2>Iniciar Sesión</h2>
+        <form id="login-form">
+          <div class="form-group">
+            <label for="login-username">Usuario</label>
+            <input type="text" id="login-username" placeholder="Ej: alice" required autocomplete="username" />
+          </div>
+          <div class="form-group">
+            <label for="login-password">Contraseña</label>
+            <input type="password" id="login-password" placeholder="••••••••" required autocomplete="current-password" />
+          </div>
+          <button type="submit" class="btn">Entrar al Lobby</button>
+        </form>
+      </section>
+
+      <!-- Formulario de Registro -->
+      <section class="card">
+        <h2>Crear Cuenta</h2>
+        <form id="register-form">
+          <div class="form-group">
+            <label for="reg-username">Nuevo Usuario</label>
+            <input type="text" id="reg-username" placeholder="Mínimo 3 caracteres" required autocomplete="username" />
+          </div>
+          <div class="form-group">
+            <label for="reg-password">Contraseña</label>
+            <input type="password" id="reg-password" placeholder="Mínimo 4 caracteres" required autocomplete="new-password" />
+          </div>
+          <button type="submit" class="btn">Registrarse</button>
+        </form>
+      </section>
+    </div>
+
+    <details class="card config-panel">
+      <summary>Configuración de Endpoints (Local / Ngrok)</summary>
+      <div class="config-row">
+        <input type="text" id="cfg-auth-url" placeholder="AUTH_URL (ej. https://abc.ngrok-free.app)" />
+        <input type="text" id="cfg-ws-url" placeholder="COORDINATOR_WS (ej. wss://xyz.ngrok-free.app)" />
+        <button type="button" id="save-cfg-btn" class="btn btn-secondary">Guardar URLs</button>
+        <button type="button" id="reset-cfg-btn" class="btn btn-secondary">Restablecer</button>
+      </div>
+    </details>
+  </div>
+
+  <script>
+    const defaultConfig = window.APP_CONFIG || {
+      AUTH_URL: 'http://localhost:4000',
+      COORDINATOR_WS: 'ws://localhost:5000'
+    };
+
+    function getAuthUrl() {
+      return (localStorage.getItem('CUSTOM_AUTH_URL') || defaultConfig.AUTH_URL).replace(/\/+$/, '');
+    }
+
+    function getWsUrl() {
+      return (localStorage.getItem('CUSTOM_COORDINATOR_WS') || defaultConfig.COORDINATOR_WS).replace(/\/+$/, '');
+    }
+
+    const alertBox = document.getElementById('global-alert');
+    function showAlert(msg, type = 'error') {
+      alertBox.textContent = msg;
+      alertBox.className = `alert alert-${type} show`;
+    }
+
+    // Mostrar mensaje si viene redirigido desde el lobby por cierre inesperado o expiración
+    const sessionReason = sessionStorage.getItem('session_message');
+    if (sessionReason) {
+      showAlert(sessionReason, 'warning');
+      sessionStorage.removeItem('session_message');
+    }
+
+    // Inicializar inputs de configuración
+    const cfgAuthInput = document.getElementById('cfg-auth-url');
+    const cfgWsInput = document.getElementById('cfg-ws-url');
+    cfgAuthInput.value = getAuthUrl();
+    cfgWsInput.value = getWsUrl();
+
+    document.getElementById('save-cfg-btn').addEventListener('click', () => {
+      if (cfgAuthInput.value.trim()) {
+        localStorage.setItem('CUSTOM_AUTH_URL', cfgAuthInput.value.trim());
+      }
+      if (cfgWsInput.value.trim()) {
+        localStorage.setItem('CUSTOM_COORDINATOR_WS', cfgWsInput.value.trim());
+      }
+      showAlert('URLs de conexión actualizadas correctamente.', 'success');
+    });
+
+    document.getElementById('reset-cfg-btn').addEventListener('click', () => {
+      localStorage.removeItem('CUSTOM_AUTH_URL');
+      localStorage.removeItem('CUSTOM_COORDINATOR_WS');
+      cfgAuthInput.value = getAuthUrl();
+      cfgWsInput.value = getWsUrl();
+      showAlert('URLs restablecidas a los valores del servidor (.env).', 'success');
+    });
+
+    // Registro
+    document.getElementById('register-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('reg-username').value.trim();
+      const password = document.getElementById('reg-password').value;
+
+      try {
+        const res = await fetch(`${getAuthUrl()}/register`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': 'true'
+          },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          return showAlert(data.error || `Error ${res.status} al registrar usuario`, 'error');
+        }
+
+        showAlert(`Usuario "${data.username}" creado con éxito (ID: ${data.userId}). Ahora puedes iniciar sesión.`, 'success');
+        document.getElementById('login-username').value = data.username;
+        document.getElementById('login-password').value = '';
+        document.getElementById('register-form').reset();
+      } catch (err) {
+        showAlert(`No se pudo conectar al Servicio de Auth en ${getAuthUrl()}`, 'error');
+      }
+    });
+
+    // Login
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('login-username').value.trim();
+      const password = document.getElementById('login-password').value;
+
+      try {
+        const res = await fetch(`${getAuthUrl()}/login`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': 'true'
+          },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          return showAlert(data.error || 'Credenciales inválidas', 'error');
+        }
+
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('username', data.username);
+        window.location.href = 'lobby.html';
+      } catch (err) {
+        showAlert(`No se pudo conectar al Servicio de Auth en ${getAuthUrl()}`, 'error');
+      }
+    });
+  </script>
+</body>
+</html>
