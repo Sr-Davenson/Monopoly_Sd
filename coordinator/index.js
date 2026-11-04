@@ -18,6 +18,8 @@ const { values: args, positionals } = parseArgs({
 const PORT = Number(args.port || positionals[0] || process.env.PORT || process.env.COORDINATOR_PORT || 5000);
 const TIMEOUT = Number(process.env.PULSE_TIMEOUT || 5000);
 const JWT_SECRET = process.env.JWT_SECRET;
+// Intervalo de ping para detectar conexiones muertas (red caída, ngrok, etc.)
+const HEARTBEAT_MS = Number(process.env.HEARTBEAT_INTERVAL || 30000);
 
 if (!JWT_SECRET) {
   console.error('[ERROR] JWT_SECRET no está definida en el archivo .env');
@@ -82,6 +84,7 @@ function broadcastPlayers() {
 
 // Validación del JWT durante el HTTP Upgrade en /connect?token=XXX
 server.on('upgrade', (req, socket, head) => {
+  socket.on('error', (err) => console.warn('[COORDINATOR] Error en socket de upgrade:', err.message));
   const parsedUrl = url.parse(req.url, true);
   const pathname = parsedUrl.pathname;
 
@@ -127,6 +130,24 @@ wss.on('connection', (ws, payload) => {
     }
   }
 
+  // Sin este handler, un error de socket tumba todo el proceso del coordinador
+  ws.on('error', (err) => {
+    console.warn(`[COORDINATOR] Error de socket (${username}):`, err.message);
+  });
+
+  // Heartbeat: si el cliente no responde al ping, se termina el socket y el
+  // evento 'close' lo saca del Map (evita jugadores "fantasma" en línea)
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+  const heartbeat = setInterval(() => {
+    if (!ws.isAlive) {
+      console.log(`[COORDINATOR] Sin respuesta de ${username} (${userId}). Terminando conexión.`);
+      return ws.terminate();
+    }
+    ws.isAlive = false;
+    ws.ping();
+  }, HEARTBEAT_MS);
+
   // Registrar jugador en el Map
   players.set(userId, {
     username,
@@ -170,6 +191,7 @@ wss.on('connection', (ws, payload) => {
 
   ws.on('close', () => {
     if (expTimer) clearTimeout(expTimer);
+    clearInterval(heartbeat);
 
     // Solo eliminamos del Map si el socket que se cierra es el socket activo actual de este userId
     // (evita que el evento close de la pestaña desplazada borre la nueva pestaña)

@@ -6,6 +6,47 @@
   <title>Monopoly SD — Lobby de Jugadores</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="config.js"></script>
+  <style>
+    /* Indicador de estado de la conexión WebSocket */
+    .conn-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.3rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.82rem;
+      border: 1px solid var(--border);
+      background-color: var(--bg);
+      color: var(--text-muted);
+    }
+    .conn-status .status-dot { transition: background-color 0.3s, box-shadow 0.3s; }
+
+    .conn-status[data-state="connecting"] { color: #fcd34d; border-color: rgba(245, 158, 11, 0.4); }
+    .conn-status[data-state="connecting"] .status-dot {
+      background-color: var(--warning);
+      box-shadow: 0 0 8px var(--warning);
+      animation: pulse 1s ease-in-out infinite;
+    }
+
+    .conn-status[data-state="connected"] { color: #6ee7b7; border-color: rgba(16, 185, 129, 0.4); }
+    .conn-status[data-state="connected"] .status-dot {
+      background-color: var(--success);
+      box-shadow: 0 0 8px var(--success);
+    }
+
+    .conn-status[data-state="disconnected"] { color: #fca5a5; border-color: rgba(239, 68, 68, 0.4); }
+    .conn-status[data-state="disconnected"] .status-dot {
+      background-color: var(--danger);
+      box-shadow: none;
+    }
+
+    .player-item.is-me { border-color: rgba(16, 185, 129, 0.5); }
+
+    @keyframes pulse { 50% { opacity: 0.35; } }
+    @media (prefers-reduced-motion: reduce) {
+      .conn-status[data-state="connecting"] .status-dot { animation: none; }
+    }
+  </style>
 </head>
 <body>
   <div class="container">
@@ -17,10 +58,13 @@
     <div class="card">
       <div class="top-bar">
         <div class="user-badge">
-          <span class="status-dot"></span>
           <span>Jugador actual: <strong id="current-username">...</strong></span>
+          <span id="conn-status" class="conn-status" data-state="connecting" role="status" aria-live="polite">
+            <span class="status-dot"></span>
+            <span id="conn-status-text">Conectando...</span>
+          </span>
         </div>
-        <button id="logout-btn" class="btn btn-danger">Cerrar sesión</button>
+        <button id="logout-btn" type="button" class="btn btn-danger">Cerrar sesión</button>
       </div>
 
       <h2>
@@ -40,13 +84,6 @@
     const token = localStorage.getItem('token');
     const currentUsername = localStorage.getItem('username') || 'Jugador';
 
-    if (!token) {
-      sessionStorage.setItem('session_message', 'Debes iniciar sesión para acceder al lobby.');
-      window.location.href = 'login.html';
-    }
-
-    document.getElementById('current-username').textContent = currentUsername;
-
     const defaultConfig = window.APP_CONFIG || {
       AUTH_URL: 'http://localhost:4000',
       COORDINATOR_WS: 'ws://localhost:5000'
@@ -56,10 +93,27 @@
       localStorage.getItem('CUSTOM_COORDINATOR_WS') || defaultConfig.COORDINATOR_WS
     ).replace(/\/+$/, '');
 
-    // Flag que indica si la desconexión fue intencional (logout o token expirado conocido)
-    let intentionalClose = false;
+    // ---------- Utilidades ----------
+    let redirecting = false;
 
-    const ws = new WebSocket(`${COORDINATOR_WS}/connect?token=${encodeURIComponent(token)}`);
+    function goToLogin(message, keepSession = false) {
+      if (redirecting) return;          // evita redirecciones dobles
+      redirecting = true;
+      // localStorage se comparte entre pestañas: si esta pestaña fue desplazada por
+      // otra (4002), NO se borra el token para no cerrarle la sesión a la pestaña nueva
+      if (!keepSession) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+      }
+      if (message) sessionStorage.setItem('session_message', message);
+      window.location.replace('login.html');
+    }
+
+    function setConnState(state, text) {
+      const el = document.getElementById('conn-status');
+      el.dataset.state = state;
+      document.getElementById('conn-status-text').textContent = text;
+    }
 
     function renderPlayers(players) {
       const listEl = document.getElementById('players-list');
@@ -93,6 +147,7 @@
         infoDiv.appendChild(nameSpan);
 
         if (p.username === currentUsername) {
+          li.classList.add('is-me');
           const youBadge = document.createElement('span');
           youBadge.className = 'badge';
           youBadge.textContent = 'Tú';
@@ -102,7 +157,7 @@
         const idSpan = document.createElement('span');
         idSpan.style.color = 'var(--text-muted)';
         idSpan.style.fontSize = '0.82rem';
-        idSpan.textContent = `ID: ${p.userId}`;
+        idSpan.textContent = p.userId !== undefined ? `ID: ${p.userId}` : '';
 
         li.appendChild(infoDiv);
         li.appendChild(idSpan);
@@ -110,61 +165,86 @@
       }
     }
 
-    ws.onopen = () => {
-      console.log('[WS] Conectado al coordinador.');
-    };
+    // ---------- Inicio ----------
+    document.getElementById('current-username').textContent = currentUsername;
 
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'players_update' && Array.isArray(msg.players)) {
-          renderPlayers(msg.players);
+    if (!token) {
+      goToLogin('Debes iniciar sesión para acceder al lobby.');
+    } else {
+      startLobby();
+    }
+
+    function startLobby() {
+      // true cuando el cierre lo provoca el propio usuario (logout)
+      let intentionalClose = false;
+      let receivedPlayersList = false;
+
+      setConnState('connecting', 'Conectando...');
+      const ws = new WebSocket(`${COORDINATOR_WS}/connect?token=${encodeURIComponent(token)}`);
+
+      ws.onopen = () => {
+        console.log('[WS] Conectado al coordinador.');
+        setConnState('connected', 'Conectado');
+
+        // Mientras el coordinador envía la lista oficial, mostramos al jugador actual
+        if (!receivedPlayersList) {
+          renderPlayers([{ username: currentUsername }]);
         }
-      } catch (err) {
-        console.error('Error parseando mensaje WS:', err);
-      }
-    };
+      };
 
-    ws.onerror = (err) => {
-      console.error('[WS] Error de conexión:', err);
-    };
+      ws.onmessage = (event) => {
+        console.log('[WS] Mensaje recibido:', event.data);
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'players_update' && Array.isArray(msg.players)) {
+            receivedPlayersList = true;
+            renderPlayers(msg.players);
+          }
+        } catch (err) {
+          console.error('Error parseando mensaje WS:', err);
+        }
+      };
 
-    ws.onclose = (event) => {
-      // Si fue un cierre intencional (logout o token expirado conocido), no mostrar alerta
-      if (intentionalClose) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('username');
-        window.location.href = 'login.html';
-        return;
-      }
+      ws.onerror = (err) => {
+        console.error('[WS] Error de conexión:', err);
+      };
 
-      let reasonMsg = 'La conexión con el coordinador se cerró inesperadamente.';
-      if (event.code === 4001 || event.reason === 'invalid token') {
-        reasonMsg = 'Sesión terminada: Token inválido o expirado. Por favor vuelve a iniciar sesión.';
-      } else if (event.code === 4002) {
-        reasonMsg = 'Tu sesión fue desconectada porque abriste el juego en otra pestaña.';
-      }
+      ws.onclose = (event) => {
+        console.log('[WS] Cerrado:', event.code, event.reason);
+        setConnState('disconnected', 'Desconectado');
 
-      sessionStorage.setItem('session_message', reasonMsg);
-      localStorage.removeItem('token');
-      localStorage.removeItem('username');
-      window.location.href = 'login.html';
-    };
+        if (intentionalClose) {
+          goToLogin('Has cerrado sesión correctamente.');
+          return;
+        }
 
-    // Botón Cerrar sesión
-    document.getElementById('logout-btn').addEventListener('click', () => {
-      intentionalClose = true;
-      localStorage.removeItem('token');
-      localStorage.removeItem('username');
-      sessionStorage.setItem('session_message', 'Has cerrado sesión correctamente.');
+        let reasonMsg = 'La conexión con el coordinador se cerró inesperadamente.';
+        let keepSession = false;
+        if (event.code === 4001 || event.reason === 'invalid token') {
+          reasonMsg = 'Sesión terminada: Token inválido o expirado. Por favor vuelve a iniciar sesión.';
+        } else if (event.code === 4002) {
+          reasonMsg = 'Tu sesión fue desconectada porque abriste el juego en otra pestaña.';
+          keepSession = true;
+        }
+        goToLogin(reasonMsg, keepSession);
+      };
 
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-        ws.close(1000, 'user logout');
-        // onclose se encargará de redirigir
-      } else {
-        window.location.href = 'login.html';
-      }
-    });
+      // Botón Cerrar sesión
+      document.getElementById('logout-btn').addEventListener('click', () => {
+        intentionalClose = true;
+        setConnState('disconnected', 'Desconectando...');
+        document.getElementById('logout-btn').disabled = true;
+
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close(1000, 'user logout');
+          // Si el coordinador no responde al cierre (red, ngrok, etc.),
+          // no dejamos al usuario atrapado: forzamos la salida.
+          setTimeout(() => goToLogin('Has cerrado sesión correctamente.'), 1500);
+        } else {
+          goToLogin('Has cerrado sesión correctamente.');
+        }
+      });
+    }
   </script>
 </body>
 </html>
