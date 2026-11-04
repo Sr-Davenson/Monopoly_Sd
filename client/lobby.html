@@ -81,8 +81,10 @@
   </div>
 
   <script>
-    const token = localStorage.getItem('token');
-    const currentUsername = localStorage.getItem('username') || 'Jugador';
+    // ── Token original leído al cargar la página ──────────────────────────────
+    // Cualquier diferencia detectada en localStorage se trata como manipulación.
+    const originalToken    = localStorage.getItem('token');
+    const currentUsername  = localStorage.getItem('username') || 'Jugador';
 
     const defaultConfig = window.APP_CONFIG || {
       AUTH_URL: 'http://localhost:4000',
@@ -93,14 +95,12 @@
       localStorage.getItem('CUSTOM_COORDINATOR_WS') || defaultConfig.COORDINATOR_WS
     ).replace(/\/+$/, '');
 
-    // ---------- Utilidades ----------
+    // ── Utilidades ────────────────────────────────────────────────────────────
     let redirecting = false;
 
     function goToLogin(message, keepSession = false) {
-      if (redirecting) return;          // evita redirecciones dobles
+      if (redirecting) return;
       redirecting = true;
-      // localStorage se comparte entre pestañas: si esta pestaña fue desplazada por
-      // otra (4002), NO se borra el token para no cerrarle la sesión a la pestaña nueva
       if (!keepSession) {
         localStorage.removeItem('token');
         localStorage.removeItem('username');
@@ -116,10 +116,9 @@
     }
 
     function renderPlayers(players) {
-      const listEl = document.getElementById('players-list');
+      const listEl  = document.getElementById('players-list');
       const countEl = document.getElementById('players-count');
       countEl.textContent = `${players.length} ${players.length === 1 ? 'conectado' : 'conectados'}`;
-
       listEl.innerHTML = '';
 
       if (players.length === 0) {
@@ -131,8 +130,8 @@
       }
 
       for (const p of players) {
-        const li = document.createElement('li');
-        li.className = 'player-item';
+        const li      = document.createElement('li');
+        li.className  = 'player-item';
 
         const infoDiv = document.createElement('div');
         infoDiv.className = 'player-info';
@@ -146,7 +145,8 @@
         infoDiv.appendChild(dot);
         infoDiv.appendChild(nameSpan);
 
-        if (p.username && currentUsername && p.username.toLowerCase() === currentUsername.toLowerCase()) {
+        if (p.username && currentUsername &&
+            p.username.toLowerCase() === currentUsername.toLowerCase()) {
           li.classList.add('is-me');
           const youBadge = document.createElement('span');
           youBadge.className = 'badge';
@@ -155,9 +155,9 @@
         }
 
         const idSpan = document.createElement('span');
-        idSpan.style.color = 'var(--text-muted)';
+        idSpan.style.color    = 'var(--text-muted)';
         idSpan.style.fontSize = '0.82rem';
-        idSpan.textContent = p.userId !== undefined ? `ID: ${p.userId}` : '';
+        idSpan.textContent    = p.userId !== undefined ? `ID: ${p.userId}` : '';
 
         li.appendChild(infoDiv);
         li.appendChild(idSpan);
@@ -165,43 +165,85 @@
       }
     }
 
-    // ---------- Inicio ----------
+    // ── Inicio ────────────────────────────────────────────────────────────────
     document.getElementById('current-username').textContent = currentUsername;
 
-    if (!token) {
+    if (!originalToken) {
       goToLogin('Debes iniciar sesión para acceder al lobby.');
     } else {
       startLobby();
     }
 
     function startLobby() {
-      // true cuando el cierre lo provoca el propio usuario (logout)
-      let intentionalClose = false;
+      let intentionalClose   = false;
       let receivedPlayersList = false;
 
       setConnState('connecting', 'Conectando...');
-      const ws = new WebSocket(`${COORDINATOR_WS}/connect?token=${encodeURIComponent(token)}`);
+      const ws = new WebSocket(`${COORDINATOR_WS}/connect?token=${encodeURIComponent(originalToken)}`);
+
+      // ── CAPA 1: Polling de localStorage (detección client-side inmediata) ──
+      // Compara cada 2 s el token guardado contra el originalToken.
+      // Si el usuario lo cambió con DevTools, se detecta antes del próximo challenge.
+      const tokenPollInterval = setInterval(() => {
+        const currentToken = localStorage.getItem('token');
+        if (currentToken !== originalToken) {
+          clearInterval(tokenPollInterval);
+          console.warn('[SECURITY] Token modificado en localStorage. Cerrando sesión.');
+          intentionalClose = true; // evita el mensaje genérico de onclose
+          if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+            ws.close(1000, 'token tampered client-side');
+          }
+          goToLogin('Sesión cerrada: se detectó una modificación no autorizada del token de sesión.');
+        }
+      }, 2000);
+
+      // ── CAPA 1b: Evento storage (detección entre pestañas) ────────────────
+      // Cuando otra pestaña cambia localStorage, este evento se dispara en la actual.
+      window.addEventListener('storage', (e) => {
+        if (e.key === 'token' && e.newValue !== originalToken) {
+          clearInterval(tokenPollInterval);
+          console.warn('[SECURITY] Token cambiado en otra pestaña. Cerrando sesión.');
+          intentionalClose = true;
+          if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+            ws.close(1000, 'token tampered from another tab');
+          }
+          goToLogin('Sesión cerrada: se detectó una modificación no autorizada del token de sesión.');
+        }
+      });
 
       ws.onopen = () => {
         console.log('[WS] Conectado al coordinador.');
         setConnState('connected', 'Conectado');
-
-        // Mientras el coordinador envía la lista oficial, mostramos al jugador actual
         if (!receivedPlayersList) {
           renderPlayers([{ username: currentUsername }]);
         }
       };
 
       ws.onmessage = (event) => {
-        console.log('[WS] Mensaje recibido:', event.data);
         try {
           const msg = JSON.parse(event.data);
+
           if (msg.type === 'players_update' && Array.isArray(msg.players)) {
             receivedPlayersList = true;
             renderPlayers(msg.players);
+            return;
           }
+
+          // ── CAPA 2: Respuesta al auth_challenge del servidor ──────────────
+          // El coordinador pregunta periódicamente "¿cuál es tu token actual?".
+          // Se responde con el token de localStorage. Si fue manipulado, el
+          // coordinador lo verifica y cierra la conexión con código 4003.
+          if (msg.type === 'auth_challenge') {
+            const currentToken = localStorage.getItem('token');
+            console.log('[WS] auth_challenge recibido — enviando auth_response.');
+            ws.send(JSON.stringify({
+              type: 'auth_response',
+              data: { token: currentToken }
+            }));
+          }
+
         } catch (err) {
-          console.error('Error parseando mensaje WS:', err);
+          console.error('[WS] Error parseando mensaje:', err);
         }
       };
 
@@ -210,6 +252,7 @@
       };
 
       ws.onclose = (event) => {
+        clearInterval(tokenPollInterval);
         console.log('[WS] Cerrado:', event.code, event.reason);
         setConnState('disconnected', 'Desconectado');
 
@@ -218,27 +261,31 @@
           return;
         }
 
-        let reasonMsg = 'La conexión con el coordinador se cerró inesperadamente.';
+        let reasonMsg   = 'La conexión con el coordinador se cerró inesperadamente.';
         let keepSession = false;
+
         if (event.code === 4001 || event.reason === 'invalid token') {
           reasonMsg = 'Sesión terminada: Token inválido o expirado. Por favor vuelve a iniciar sesión.';
         } else if (event.code === 4002) {
-          reasonMsg = 'Tu sesión fue desconectada porque abriste el juego en otra pestaña.';
+          reasonMsg   = 'Tu sesión fue desconectada porque abriste el juego en otra pestaña.';
           keepSession = true;
+        } else if (event.code === 4003) {
+          // El servidor detectó token manipulado en el auth_challenge
+          reasonMsg = 'Sesión cerrada: se detectó una modificación no autorizada del token de sesión.';
         }
+
         goToLogin(reasonMsg, keepSession);
       };
 
-      // Botón Cerrar sesión
+      // ── Botón Cerrar sesión ───────────────────────────────────────────────
       document.getElementById('logout-btn').addEventListener('click', () => {
+        clearInterval(tokenPollInterval);
         intentionalClose = true;
         setConnState('disconnected', 'Desconectando...');
         document.getElementById('logout-btn').disabled = true;
 
         if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
           ws.close(1000, 'user logout');
-          // Si el coordinador no responde al cierre (red, ngrok, etc.),
-          // no dejamos al usuario atrapado: forzamos la salida.
           setTimeout(() => goToLogin('Has cerrado sesión correctamente.'), 1500);
         } else {
           goToLogin('Has cerrado sesión correctamente.');

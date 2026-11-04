@@ -15,18 +15,27 @@ const { values: args, positionals } = parseArgs({
   }
 });
 
-const PORT = Number(args.port || positionals[0] || process.env.PORT || process.env.COORDINATOR_PORT || 5000);
-const TIMEOUT = Number(process.env.PULSE_TIMEOUT || 5000);
+const PORT      = Number(args.port || positionals[0] || process.env.PORT || process.env.COORDINATOR_PORT || 5000);
+const TIMEOUT   = Number(process.env.PULSE_TIMEOUT || 5000);
 const JWT_SECRET = process.env.JWT_SECRET;
+
 // Intervalo de ping para detectar conexiones muertas (red caída, ngrok, etc.)
 const HEARTBEAT_MS = Number(process.env.HEARTBEAT_INTERVAL || 30000);
+
+// ── Token-revalidation challenge ──────────────────────────────────────────────
+// Cada AUTH_CHALLENGE_INTERVAL ms el coordinador pide al cliente que reenvíe
+// su token actual. Si en AUTH_CHALLENGE_TIMEOUT ms no llega respuesta válida
+// se cierra la conexión con código 4003 (token manipulado / sesión inválida).
+const AUTH_CHALLENGE_INTERVAL = Number(process.env.AUTH_CHALLENGE_INTERVAL || 20000); // 20 s
+const AUTH_CHALLENGE_TIMEOUT  = Number(process.env.AUTH_CHALLENGE_TIMEOUT  ||  5000); //  5 s
+// ─────────────────────────────────────────────────────────────────────────────
 
 if (!JWT_SECRET) {
   console.error('[ERROR] JWT_SECRET no está definida en el archivo .env');
   process.exit(1);
 }
 
-const ID = Math.floor(Math.random() * 10000);
+const ID   = Math.floor(Math.random() * 10000);
 const role = args.role || process.env.COORDINATOR_ROLE || 'PRIMARY';
 const servers = {};
 const totalTimeouts = 0;
@@ -70,10 +79,7 @@ function broadcastPlayers() {
     username: p.username
   }));
 
-  const msg = JSON.stringify({
-    type: 'players_update',
-    players: list
-  });
+  const msg = JSON.stringify({ type: 'players_update', players: list });
 
   for (const { socket } of players.values()) {
     if (socket.readyState === socket.OPEN) {
@@ -86,7 +92,7 @@ function broadcastPlayers() {
 server.on('upgrade', (req, socket, head) => {
   socket.on('error', (err) => console.warn('[COORDINATOR] Error en socket de upgrade:', err.message));
   const parsedUrl = url.parse(req.url, true);
-  const pathname = parsedUrl.pathname;
+  const pathname  = parsedUrl.pathname;
 
   if (pathname !== '/connect') {
     socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
@@ -97,18 +103,13 @@ server.on('upgrade', (req, socket, head) => {
   const token = parsedUrl.query.token;
 
   try {
-    if (!token) {
-      throw new Error('Token ausente');
-    }
-
+    if (!token) throw new Error('Token ausente');
     const payload = jwt.verify(token, JWT_SECRET);
-
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, payload);
     });
   } catch (err) {
     console.warn(`[COORDINATOR] Conexión rechazada (token inválido/vencido): ${err.message}`);
-    // Cerramos con código 4001 y mensaje "invalid token" para que el cliente WebSocket reciba el código exacto
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.close(4001, 'invalid token');
     });
@@ -116,11 +117,10 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 wss.on('connection', (ws, payload) => {
-  const userId = String(payload.userId);
+  const userId   = String(payload.userId);
   const username = payload.username;
 
-  // Política de pestañas duplicadas: si el mismo usuario ya tiene una conexión activa,
-  // desconectamos la primera sesión antes de registrar la nueva.
+  // Política de pestañas duplicadas
   if (players.has(userId)) {
     const previousSession = players.get(userId);
     console.log(`[COORDINATOR] Sesión duplicada detectada para ${username} (${userId}). Cerrando sesión anterior.`);
@@ -130,13 +130,11 @@ wss.on('connection', (ws, payload) => {
     }
   }
 
-  // Sin este handler, un error de socket tumba todo el proceso del coordinador
   ws.on('error', (err) => {
     console.warn(`[COORDINATOR] Error de socket (${username}):`, err.message);
   });
 
-  // Heartbeat: si el cliente no responde al ping, se termina el socket y el
-  // evento 'close' lo saca del Map (evita jugadores "fantasma" en línea)
+  // ── Heartbeat ──────────────────────────────────────────────────────────────
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   const heartbeat = setInterval(() => {
@@ -148,19 +146,33 @@ wss.on('connection', (ws, payload) => {
     ws.ping();
   }, HEARTBEAT_MS);
 
-  // Registrar jugador en el Map
-  players.set(userId, {
-    username,
-    socket: ws,
-    connectedAt: new Date().toISOString()
-  });
+  // ── Token-challenge: re-validación periódica del token ────────────────────
+  // Permite detectar manipulación manual del token desde DevTools en tiempo real.
+  let challengeResponseTimer = null; // timer de espera por respuesta
 
+  const challengeInterval = setInterval(() => {
+    if (ws.readyState !== ws.OPEN) return;
+
+    // Enviar desafío al cliente
+    send(ws, 'auth_challenge', {});
+    console.log(`[COORDINATOR] auth_challenge enviado a ${username} (${userId})`);
+
+    // Si en AUTH_CHALLENGE_TIMEOUT ms no llega auth_response válido → cerrar
+    challengeResponseTimer = setTimeout(() => {
+      if (ws.readyState === ws.OPEN) {
+        console.warn(`[COORDINATOR] Sin respuesta al auth_challenge de ${username} (${userId}). Cerrando por token sucio/ausente.`);
+        ws.close(4003, 'token tampered or missing');
+      }
+    }, AUTH_CHALLENGE_TIMEOUT);
+  }, AUTH_CHALLENGE_INTERVAL);
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Registrar jugador
+  players.set(userId, { username, socket: ws, connectedAt: new Date().toISOString() });
   console.log(`[COORDINATOR] Jugador conectado: ${username} (id: ${userId}) | Total en línea: ${players.size}`);
-
-  // Broadcast de la lista actualizada a todos los conectados
   broadcastPlayers();
 
-  // Si el token tiene exp, programar verificación cuando venza durante la sesión activa
+  // Expiración natural del token
   let expTimer = null;
   if (payload.exp) {
     const msUntilExpiry = payload.exp * 1000 - Date.now();
@@ -191,10 +203,10 @@ wss.on('connection', (ws, payload) => {
 
   ws.on('close', () => {
     if (expTimer) clearTimeout(expTimer);
+    if (challengeResponseTimer) clearTimeout(challengeResponseTimer);
     clearInterval(heartbeat);
+    clearInterval(challengeInterval);
 
-    // Solo eliminamos del Map si el socket que se cierra es el socket activo actual de este userId
-    // (evita que el evento close de la pestaña desplazada borre la nueva pestaña)
     const current = players.get(userId);
     if (current && current.socket === ws) {
       players.delete(userId);
@@ -208,15 +220,53 @@ const handlers = {
   ping(ws) {
     send(ws, 'pong', { timestamp: Date.now() });
   },
+
   get_players(ws) {
     const list = Array.from(players.entries()).map(([userId, p]) => ({
       userId: String(userId),
       username: p.username
     }));
     ws.send(JSON.stringify({ type: 'players_update', players: list }));
+  },
+
+  // ── Respuesta al auth_challenge ───────────────────────────────────────────
+  // El cliente reenvía el token que tiene en localStorage.
+  // Se verifica firma + que el userId del payload coincida con el userId de esta sesión.
+  auth_response(ws, data, { userId, username }) {
+    // Cancelar el timer de timeout — llegó la respuesta
+    if (challengeResponseTimer) {
+      clearTimeout(challengeResponseTimer);
+      challengeResponseTimer = null;
+    }
+
+    const clientToken = data && data.token;
+
+    if (!clientToken) {
+      console.warn(`[COORDINATOR] auth_response sin token de ${username} (${userId}). Cerrando.`);
+      ws.close(4003, 'token tampered or missing');
+      return;
+    }
+
+    try {
+      const verifiedPayload = jwt.verify(clientToken, JWT_SECRET);
+
+      // El userId del token debe coincidir con el userId de esta sesión WS
+      if (String(verifiedPayload.userId) !== userId) {
+        console.warn(`[COORDINATOR] Token de otra cuenta enviado por ${username} (${userId}). Cerrando.`);
+        ws.close(4003, 'token tampered or missing');
+        return;
+      }
+
+      console.log(`[COORDINATOR] auth_response válido de ${username} (${userId}). Sesión confirmada.`);
+    } catch (err) {
+      console.warn(`[COORDINATOR] Token inválido en auth_response de ${username} (${userId}): ${err.message}. Cerrando.`);
+      ws.close(4003, 'token tampered or missing');
+    }
   }
+  // ─────────────────────────────────────────────────────────────────────────
 };
 
 server.listen(PORT, () => {
   console.log(`Coordinator ${ID} (${role}) en http://localhost:${PORT} y WS en ws://localhost:${PORT}/connect`);
+  console.log(`  -> Auth challenge cada ${AUTH_CHALLENGE_INTERVAL / 1000}s, timeout de respuesta ${AUTH_CHALLENGE_TIMEOUT / 1000}s`);
 });
