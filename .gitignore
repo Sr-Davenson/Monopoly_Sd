@@ -4,5 +4,7 @@ node_modules/
 *.db-wal
 *.db-shm
 .env
+.env.example
 codigoBase/
 SSD_TALLER_4.md
+README.md
