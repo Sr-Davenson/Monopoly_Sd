@@ -1,4 +1,5 @@
-require('dotenv').config();
+const path = require('node:path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const http = require('node:http');
 const url = require('node:url');
 const { parseArgs } = require('node:util');
