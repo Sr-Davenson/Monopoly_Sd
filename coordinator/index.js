@@ -6,6 +6,7 @@ const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
+const { MonopolyGame, GameError } = require('./game/monopoly');
 
 const { values: args, positionals } = parseArgs({
   allowPositionals: true,
@@ -41,6 +42,13 @@ const TICK_RATE     = 20;                                        // Hz
 const TICK_MS       = 1000 / TICK_RATE;
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Partida de Monopoly (una sala global) ────────────────────────────────────
+// Si el jugador en turno se desconecta, su turno se salta tras este tiempo.
+const DISCONNECT_GRACE_MS = Number(process.env.DISCONNECT_GRACE_MS || 30000);
+const game = new MonopolyGame();
+let skipTimer = null;
+// ─────────────────────────────────────────────────────────────────────────────
+
 if (!JWT_SECRET) {
   console.error('[ERROR] JWT_SECRET no está definida en el archivo .env');
   process.exit(1);
@@ -71,7 +79,12 @@ app.get('/status', (req, res) => {
     playersCount: players.size,
     players: activePlayers,
     servers: Object.values(servers),
-    totalTimeouts
+    totalTimeouts,
+    game: {
+      phase: game.phase,
+      players: game.players.length,
+      turnOf: game.turn ? game.turn.playerId : null
+    }
   });
 });
 
@@ -99,7 +112,34 @@ function broadcastPlayers() {
   }
 }
 
-// Validación del JWT durante el HTTP Upgrade en /connect?token=XXX
+// ── Monopoly: difusión del estado ─────────────────────────────────────────────
+// A diferencia del canvas (20 Hz), el tablero es por turnos: el estado se envía
+// solo cuando una acción lo cambia.
+function broadcastGame() {
+  const msg = JSON.stringify({ type: 'game_state', data: game.toJSON() });
+  for (const { socket } of players.values()) {
+    if (socket.readyState === socket.OPEN) socket.send(msg);
+  }
+  scheduleDisconnectSkip();
+}
+
+// Si el jugador en turno está desconectado, saltar su turno tras un periodo de gracia.
+function scheduleDisconnectSkip() {
+  if (skipTimer) { clearTimeout(skipTimer); skipTimer = null; }
+  if (game.phase !== 'playing' || !game.turn) return;
+  const current = game.current();
+  if (!current || current.connected) return;
+  const turnId = current.id;
+  skipTimer = setTimeout(() => {
+    skipTimer = null;
+    if (game.skipDisconnected(turnId)) {
+      game.version++;
+      broadcastGame();
+    }
+  }, DISCONNECT_GRACE_MS);
+}
+
+// Validación del JWT durante el HTTP Upgrade en /connect?token=XXX&view=board|canvas
 server.on('upgrade', (req, socket, head) => {
   socket.on('error', (err) => console.warn('[COORDINATOR] Error en socket de upgrade:', err.message));
   const parsedUrl = url.parse(req.url, true);
@@ -112,12 +152,14 @@ server.on('upgrade', (req, socket, head) => {
   }
 
   const token = parsedUrl.query.token;
+  // 'board' = pantalla del tablero (no participa en el canvas en tiempo real)
+  const view  = parsedUrl.query.view === 'board' ? 'board' : 'canvas';
 
   try {
     if (!token) throw new Error('Token ausente');
     const payload = jwt.verify(token, JWT_SECRET);
     wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, payload);
+      wss.emit('connection', ws, payload, view);
     });
   } catch (err) {
     console.warn(`[COORDINATOR] Conexión rechazada (token inválido/vencido): ${err.message}`);
@@ -127,7 +169,7 @@ server.on('upgrade', (req, socket, head) => {
   }
 });
 
-wss.on('connection', (ws, payload) => {
+wss.on('connection', (ws, payload, view = 'canvas') => {
   const userId   = String(payload.userId);
   const username = payload.username;
   const provider = payload.provider || 'local';
@@ -197,6 +239,7 @@ wss.on('connection', (ws, payload) => {
   players.set(userId, {
     username,
     provider,
+    view,
     socket: ws,
     connectedAt: new Date().toISOString(),
     x: PLAYER_RADIUS + Math.random() * (WORLD_WIDTH  - 2 * PLAYER_RADIUS),
@@ -219,6 +262,17 @@ wss.on('connection', (ws, payload) => {
   }));
 
   broadcastPlayers();
+
+  // Monopoly: datos estáticos del tablero + estado actual de la partida.
+  // Si el usuario ya estaba en la partida, se marca como reconectado.
+  send(ws, 'game_config', MonopolyGame.config());
+  if (game.getPlayer(userId)) {
+    game.setConnected(userId, true);
+    game.version++;
+    broadcastGame();
+  } else {
+    send(ws, 'game_state', game.toJSON());
+  }
 
   // Expiración natural del token
   let expTimer = null;
@@ -260,6 +314,15 @@ wss.on('connection', (ws, payload) => {
       players.delete(userId);
       console.log(`[COORDINATOR] Jugador desconectado: ${username} (id: ${userId}) | Total en línea: ${players.size}`);
       broadcastPlayers();
+
+      // Monopoly: se conserva su asiento; si estaba en la sala de espera, se libera.
+      const gp = game.getPlayer(userId);
+      if (gp) {
+        if (game.phase === 'lobby') game.leave(userId);
+        else game.setConnected(userId, false);
+        game.version++;
+        broadcastGame();
+      }
     }
   });
 });
@@ -267,6 +330,26 @@ wss.on('connection', (ws, payload) => {
 const handlers = {
   ping(ws) {
     send(ws, 'pong', { timestamp: Date.now() });
+  },
+
+  // ── Monopoly: todas las acciones del tablero ──────────────────────────────
+  // { type: 'game_action', data: { action: 'roll' | 'buy' | 'build' | ..., ...params } }
+  // El motor valida turno, etapa y fondos. Si la acción no es válida, solo el
+  // remitente recibe 'game_error' y el estado no cambia.
+  game_action(ws, data, { userId, username }) {
+    if (typeof data.action !== 'string') return send(ws, 'game_error', { message: 'Acción requerida' });
+    try {
+      game.handle(userId, username, data.action, data);
+      broadcastGame();
+    } catch (err) {
+      if (err instanceof GameError) return send(ws, 'game_error', { message: err.message });
+      console.error('[COORDINATOR] Error en game_action:', err);
+      send(ws, 'game_error', { message: 'Error interno' });
+    }
+  },
+
+  get_game(ws) {
+    send(ws, 'game_state', game.toJSON());
   },
 
   get_players(ws) {
@@ -344,8 +427,9 @@ const handlers = {
 
 // ── Game loop (servidor autoritativo) ─────────────────────────────────────────
 // Snapshot serializable del estado (sin el socket).
+// Solo incluye a quienes están en la vista del canvas (no a los del tablero).
 function snapshot() {
-  return Array.from(players.entries()).map(([userId, p]) => ({
+  return Array.from(players.entries()).filter(([, p]) => p.view !== 'board').map(([userId, p]) => ({
     userId,
     username: p.username,
     provider: p.provider,
@@ -357,8 +441,8 @@ function snapshot() {
 
 function broadcast(obj) {
   const msg = JSON.stringify(obj);
-  for (const { socket } of players.values()) {
-    if (socket.readyState === socket.OPEN) socket.send(msg);
+  for (const { socket, view } of players.values()) {
+    if (view !== 'board' && socket.readyState === socket.OPEN) socket.send(msg);
   }
 }
 
