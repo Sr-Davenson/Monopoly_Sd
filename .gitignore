@@ -8,3 +8,5 @@ node_modules/
 codigoBase/
 SSD_TALLER_4.md
 README.md
+package-lock.json
+package.json
