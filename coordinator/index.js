@@ -177,6 +177,19 @@ wss.on('connection', (ws, payload) => {
       }
     }, AUTH_CHALLENGE_TIMEOUT);
   }, AUTH_CHALLENGE_INTERVAL);
+
+  // Contexto de la sesión que se pasa a los handlers. clearChallenge permite a
+  // auth_response cancelar el timer, que vive en el closure de esta conexión.
+  const session = {
+    userId,
+    username,
+    clearChallenge() {
+      if (challengeResponseTimer) {
+        clearTimeout(challengeResponseTimer);
+        challengeResponseTimer = null;
+      }
+    }
+  };
   // ─────────────────────────────────────────────────────────────────────────
 
   // Registrar jugador con su estado de juego.
@@ -233,7 +246,7 @@ wss.on('connection', (ws, payload) => {
     if (!handler) {
       return send(ws, 'error', { message: `tipo desconocido: ${msg.type}` });
     }
-    handler(ws, msg.data || {}, { userId, username }, msg);
+    handler(ws, msg.data || {}, session, msg);
   });
 
   ws.on('close', () => {
@@ -298,12 +311,9 @@ const handlers = {
   // ── Respuesta al auth_challenge ───────────────────────────────────────────
   // El cliente reenvía el token que tiene en localStorage.
   // Se verifica firma + que el userId del payload coincida con el userId de esta sesión.
-  auth_response(ws, data, { userId, username }) {
+  auth_response(ws, data, { userId, username, clearChallenge }) {
     // Cancelar el timer de timeout — llegó la respuesta
-    if (challengeResponseTimer) {
-      clearTimeout(challengeResponseTimer);
-      challengeResponseTimer = null;
-    }
+    clearChallenge();
 
     const clientToken = data && data.token;
 
