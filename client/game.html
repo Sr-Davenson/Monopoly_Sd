@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Monopoly SD — Tablero</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="game.css" />
+  <script src="config.js"></script>
+</head>
+<body class="game-body">
+  <header class="game-header">
+    <div class="game-header-left">
+      <strong class="game-title">Monopoly SD</strong>
+      <span id="conn-status" class="conn-pill" data-state="connecting">Conectando...</span>
+    </div>
+    <div class="game-header-right">
+      <span>Jugador: <strong id="me-name">...</strong></span>
+      <span id="me-money" class="money-pill" hidden></span>
+      <a href="lobby.html" class="btn btn-small btn-ghost">Lobby</a>
+    </div>
+  </header>
+
+  <!-- ── Sala de espera: elección de temática (solo al inicio) ─────────────── -->
+  <section id="waiting-room" class="waiting-room" hidden>
+    <div class="card">
+      <h2>Elige tu temática inicial</h2>
+      <p class="text-muted small">Tu ficha inicial depende de la temática. Solo se escoge antes de empezar.</p>
+      <div id="theme-grid" class="theme-grid"></div>
+      <div class="waiting-actions">
+        <button id="join-btn" class="btn" disabled>Unirme</button>
+        <button id="leave-btn" class="btn btn-ghost" hidden>Salir de la sala</button>
+        <button id="start-btn" class="btn btn-success" hidden>Iniciar partida</button>
+      </div>
+      <h3 class="mt">En la sala <span id="waiting-count" class="badge">0</span></h3>
+      <ul id="waiting-list" class="waiting-list"></ul>
+    </div>
+  </section>
+
+  <!-- ── Partida ────────────────────────────────────────────────────────────── -->
+  <main id="game-area" class="game-area" hidden>
+    <div class="board-wrap">
+      <div id="board" class="board">
+        <div class="board-center">
+          <div class="center-title">[Nombre del juego]</div>
+          <div id="turn-info" class="turn-info"></div>
+          <div class="dice-row">
+            <div id="die-1" class="die">–</div>
+            <div id="die-2" class="die">–</div>
+          </div>
+          <div id="actions" class="actions"></div>
+          <div id="pot" class="pot"></div>
+          <div id="last-card" class="last-card" hidden></div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="side-panel">
+      <div class="panel">
+        <h3>Jugadores</h3>
+        <ul id="players" class="players"></ul>
+      </div>
+
+      <div class="panel">
+        <h3>Casilla seleccionada</h3>
+        <div id="space-detail" class="space-detail text-muted small">Haz clic en una casilla del tablero.</div>
+      </div>
+
+      <div class="panel">
+        <h3>Mis propiedades</h3>
+        <div id="my-props" class="my-props text-muted small">Sin propiedades.</div>
+      </div>
+
+      <div class="panel">
+        <h3>Intercambios</h3>
+        <div id="trade-incoming"></div>
+        <div id="trade-form" class="trade-form"></div>
+      </div>
+
+      <div class="panel">
+        <h3>Registro</h3>
+        <ol id="log" class="log"></ol>
+      </div>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="game.js"></script>
+</body>
+</html>
