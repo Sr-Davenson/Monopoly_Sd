@@ -6,7 +6,7 @@ const cors = require('cors');
 const PORT = Number(process.env.PORT || 3000);
 const AUTH_URL = process.env.AUTH_URL || 'http://localhost:4000';
 const COORDINATOR_WS = process.env.COORDINATOR_WS || 'ws://localhost:5000';
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '786041305351-sj20hhmusecqdqtg9qactcnjqcq3o3ta.apps.googleusercontent.com';
 
 const app = express();
 app.use(cors());
@@ -33,7 +33,5 @@ app.listen(PORT, () => {
   console.log(`Cliente Web corriendo en http://localhost:${PORT}`);
   console.log(`  -> AUTH_URL: ${AUTH_URL}`);
   console.log(`  -> COORDINATOR_WS: ${COORDINATOR_WS}`);
-  if (GOOGLE_CLIENT_ID) {
-    console.log(`  -> GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}`);
-  }
+  console.log(`  -> GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}`);
 });

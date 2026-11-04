@@ -58,7 +58,27 @@
       <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.25rem;">
         Inicia sesión o regístrate con tu cuenta de Google
       </p>
-      <div id="google-btn-wrapper" class="google-btn-wrapper"></div>
+
+      <!-- Contenedor del botón oficial de Google -->
+      <div id="g_id_onload"
+           data-client_id="786041305351-sj20hhmusecqdqtg9qactcnjqcq3o3ta.apps.googleusercontent.com"
+           data-context="signin"
+           data-ux_mode="popup"
+           data-callback="handleGoogleCredentialResponse"
+           data-auto_prompt="false">
+      </div>
+
+      <div class="google-btn-wrapper" style="display: flex; justify-content: center; align-items: center; min-height: 48px;">
+        <div id="google-btn-wrapper" class="g_id_signin"
+             data-type="standard"
+             data-shape="rectangular"
+             data-theme="outline"
+             data-text="signin_with"
+             data-size="large"
+             data-logo_alignment="left"
+             data-width="280">
+        </div>
+      </div>
       <p id="google-status-msg" style="color: var(--text-muted); font-size: 0.82rem; margin-top: 0.75rem;"></p>
     </section>
 
@@ -88,11 +108,13 @@
     localStorage.removeItem('CUSTOM_COORDINATOR_WS');
     localStorage.removeItem('CUSTOM_GOOGLE_CLIENT_ID');
 
-    // Configuración tomada directamente de variables de entorno (.env vía config.js)
+    const DEFAULT_GOOGLE_CLIENT_ID = '786041305351-sj20hhmusecqdqtg9qactcnjqcq3o3ta.apps.googleusercontent.com';
+
+    // Configuración tomada de variables de entorno (.env vía config.js)
     const config = window.APP_CONFIG || {
       AUTH_URL: 'http://localhost:4000',
       COORDINATOR_WS: 'ws://localhost:5000',
-      GOOGLE_CLIENT_ID: ''
+      GOOGLE_CLIENT_ID: DEFAULT_GOOGLE_CLIENT_ID
     };
 
     function getAuthUrl() {
@@ -100,7 +122,8 @@
     }
 
     function getGoogleClientId() {
-      return (config.GOOGLE_CLIENT_ID || '').trim();
+      const id = (config && config.GOOGLE_CLIENT_ID) ? config.GOOGLE_CLIENT_ID.trim() : '';
+      return id || DEFAULT_GOOGLE_CLIENT_ID;
     }
 
     const alertBox = document.getElementById('global-alert');
@@ -210,9 +233,15 @@
       const wrapper = document.getElementById('google-btn-wrapper');
       const statusMsg = document.getElementById('google-status-msg');
 
+      // Actualizar atributo declarativo si existe
+      const onloadEl = document.getElementById('g_id_onload');
+      if (onloadEl) {
+        onloadEl.setAttribute('data-client_id', clientId);
+      }
+
       if (!clientId) {
         wrapper.innerHTML = '';
-        statusMsg.textContent = 'Configura GOOGLE_CLIENT_ID en client/.env para habilitar el botón de Google.';
+        statusMsg.textContent = 'Configura GOOGLE_CLIENT_ID en client/.env para habilitar el botón.';
         return;
       }
       statusMsg.textContent = '';
@@ -224,18 +253,28 @@
             callback: handleGoogleCredentialResponse,
             auto_select: false
           });
-          wrapper.innerHTML = '';
-          window.google.accounts.id.renderButton(
-            wrapper,
-            { theme: 'outline', size: 'large', text: 'signin_with', shape: 'rectangular', width: 280 }
-          );
+
+          // Si el botón aún no tiene un iframe hijo renderizado por Google, renderizarlo programáticamente
+          if (!wrapper.querySelector('iframe')) {
+            window.google.accounts.id.renderButton(
+              wrapper,
+              {
+                theme: 'outline',
+                size: 'large',
+                text: 'signin_with',
+                shape: 'rectangular',
+                logo_alignment: 'left',
+                width: 280
+              }
+            );
+          }
         } catch (e) {
           console.error('[Google GSI Error]', e);
           statusMsg.textContent = 'Error inicializando Google Sign-In: ' + e.message;
         }
       } else {
         // Reintentar cuando el script gsi cargue
-        setTimeout(initGoogleSignIn, 300);
+        setTimeout(initGoogleSignIn, 200);
       }
     }
 
@@ -279,6 +318,9 @@
         showAlert(`No se pudo conectar con el Servicio de Auth en ${getAuthUrl()}`, 'error');
       }
     }
+
+    // Exponer función de callback global para la API declarativa de Google
+    window.handleGoogleCredentialResponse = handleGoogleCredentialResponse;
 
     function showGoogleUsernameModal(hint) {
       const modal = document.getElementById('google-username-modal');
@@ -339,10 +381,12 @@
       }
     });
 
-    // Cargar botón de Google cuando el DOM esté listo
-    window.addEventListener('DOMContentLoaded', () => {
+    // Inicializar Google Sign-In
+    if (document.readyState === 'loading') {
+      window.addEventListener('DOMContentLoaded', initGoogleSignIn);
+    } else {
       initGoogleSignIn();
-    });
+    }
   </script>
 </body>
 </html>
