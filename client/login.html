@@ -6,18 +6,20 @@
   <title>Monopoly SD — Acceso de Jugadores</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="config.js"></script>
+  <!-- Google Identity Services SDK (Opción A) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
   <div class="container">
     <header class="header">
       <h1>Monopoly SD — Identidad y Sesiones</h1>
-      <p>Regístrate o inicia sesión para conectarte al Coordinador en tiempo real</p>
+      <p>Regístrate, inicia sesión o accede con Google para entrar al Lobby</p>
     </header>
 
     <div id="global-alert" class="alert"></div>
 
     <div class="grid-2">
-      <!-- Formulario de Login -->
+      <!-- Formulario de Login Local -->
       <section class="card">
         <h2>Iniciar Sesión</h2>
         <form id="login-form">
@@ -33,7 +35,7 @@
         </form>
       </section>
 
-      <!-- Formulario de Registro -->
+      <!-- Formulario de Registro Local -->
       <section class="card">
         <h2>Crear Cuenta</h2>
         <form id="register-form">
@@ -50,12 +52,45 @@
       </section>
     </div>
 
+    <!-- Sección de Autenticación con Google (Opción A) -->
+    <section class="card" style="margin-top: 1.5rem; text-align: center;">
+      <h2>Acceso con Google</h2>
+      <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.25rem;">
+        Inicia sesión o regístrate con tu cuenta institucional o personal de Google
+      </p>
+      <div id="google-btn-wrapper" class="google-btn-wrapper"></div>
+      <p id="google-status-msg" style="color: var(--text-muted); font-size: 0.82rem; margin-top: 0.75rem;"></p>
+    </section>
+
+    <!-- Modal para primer login con Google (seleccionar username) -->
+    <div id="google-username-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-content">
+        <h3>¡Bienvenido a Monopoly SD!</h3>
+        <p>Es tu primer inicio con Google. Elige tu nombre de usuario para el juego:</p>
+        <div id="modal-alert" class="alert"></div>
+        <form id="google-username-form">
+          <div class="form-group">
+            <label for="google-username-input">Nombre de usuario</label>
+            <input type="text" id="google-username-input" placeholder="Ej: bob_google" required autocomplete="username" />
+          </div>
+          <div class="modal-actions">
+            <button type="submit" class="btn">Confirmar y Entrar</button>
+            <button type="button" id="cancel-google-modal-btn" class="btn btn-secondary">Cancelar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Panel de Configuración de Endpoints -->
     <details class="card config-panel">
-      <summary>Configuración de Endpoints (Local / Ngrok)</summary>
+      <summary>Configuración de Endpoints y Google Client ID (Local / Ngrok)</summary>
       <div class="config-row">
         <input type="text" id="cfg-auth-url" placeholder="AUTH_URL (ej. https://abc.ngrok-free.app)" />
         <input type="text" id="cfg-ws-url" placeholder="COORDINATOR_WS (ej. wss://xyz.ngrok-free.app)" />
-        <button type="button" id="save-cfg-btn" class="btn btn-secondary">Guardar URLs</button>
+      </div>
+      <div class="config-row" style="margin-top: 0.5rem;">
+        <input type="text" id="cfg-google-client-id" placeholder="GOOGLE_CLIENT_ID (ej. 12345...apps.googleusercontent.com)" />
+        <button type="button" id="save-cfg-btn" class="btn btn-secondary">Guardar Configuración</button>
         <button type="button" id="reset-cfg-btn" class="btn btn-secondary">Restablecer</button>
       </div>
     </details>
@@ -64,7 +99,8 @@
   <script>
     const defaultConfig = window.APP_CONFIG || {
       AUTH_URL: 'http://localhost:4000',
-      COORDINATOR_WS: 'ws://localhost:5000'
+      COORDINATOR_WS: 'ws://localhost:5000',
+      GOOGLE_CLIENT_ID: ''
     };
 
     function getAuthUrl() {
@@ -75,13 +111,23 @@
       return (localStorage.getItem('CUSTOM_COORDINATOR_WS') || defaultConfig.COORDINATOR_WS).replace(/\/+$/, '');
     }
 
+    function getGoogleClientId() {
+      return (localStorage.getItem('CUSTOM_GOOGLE_CLIENT_ID') || defaultConfig.GOOGLE_CLIENT_ID || '').trim();
+    }
+
     const alertBox = document.getElementById('global-alert');
     function showAlert(msg, type = 'error') {
       alertBox.textContent = msg;
       alertBox.className = `alert alert-${type} show`;
     }
 
-    // Mostrar mensaje si viene redirigido desde el lobby por cierre inesperado o expiración
+    const modalAlertBox = document.getElementById('modal-alert');
+    function showModalAlert(msg, type = 'error') {
+      modalAlertBox.textContent = msg;
+      modalAlertBox.className = `alert alert-${type} show`;
+    }
+
+    // Mostrar mensaje si viene redirigido desde el lobby
     const sessionReason = sessionStorage.getItem('session_message');
     if (sessionReason) {
       showAlert(sessionReason, 'warning');
@@ -91,8 +137,10 @@
     // Inicializar inputs de configuración
     const cfgAuthInput = document.getElementById('cfg-auth-url');
     const cfgWsInput = document.getElementById('cfg-ws-url');
+    const cfgGoogleInput = document.getElementById('cfg-google-client-id');
     cfgAuthInput.value = getAuthUrl();
     cfgWsInput.value = getWsUrl();
+    cfgGoogleInput.value = getGoogleClientId();
 
     document.getElementById('save-cfg-btn').addEventListener('click', () => {
       if (cfgAuthInput.value.trim()) {
@@ -101,22 +149,29 @@
       if (cfgWsInput.value.trim()) {
         localStorage.setItem('CUSTOM_COORDINATOR_WS', cfgWsInput.value.trim());
       }
-      showAlert('URLs de conexión actualizadas correctamente.', 'success');
+      if (cfgGoogleInput.value.trim()) {
+        localStorage.setItem('CUSTOM_GOOGLE_CLIENT_ID', cfgGoogleInput.value.trim());
+      }
+      showAlert('Configuración guardada correctamente.', 'success');
+      initGoogleSignIn();
     });
 
     document.getElementById('reset-cfg-btn').addEventListener('click', () => {
       localStorage.removeItem('CUSTOM_AUTH_URL');
       localStorage.removeItem('CUSTOM_COORDINATOR_WS');
+      localStorage.removeItem('CUSTOM_GOOGLE_CLIENT_ID');
       cfgAuthInput.value = getAuthUrl();
       cfgWsInput.value = getWsUrl();
-      showAlert('URLs restablecidas a los valores del servidor (.env).', 'success');
+      cfgGoogleInput.value = getGoogleClientId();
+      showAlert('Configuración restablecida a los valores por defecto.', 'success');
+      initGoogleSignIn();
     });
 
-    // Solo letras, dígitos y guion bajo: evita caracteres especiales / inyecciones SQL
+    // Solo letras, dígitos y guion bajo: evita caracteres especiales / inyecciones
     const SAFE_USERNAME_RE = /^[a-zA-Z0-9_]+$/;
 
-    // Normalizar automáticamente a minúsculas cuando el usuario deja el campo
-    ['reg-username', 'login-username'].forEach((id) => {
+    // Normalizar automáticamente a minúsculas
+    ['reg-username', 'login-username', 'google-username-input'].forEach((id) => {
       const input = document.getElementById(id);
       if (input) {
         input.addEventListener('blur', () => {
@@ -125,17 +180,14 @@
       }
     });
 
-    // Registro
+    // Registro Local
     document.getElementById('register-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const username = document.getElementById('reg-username').value.trim().toLowerCase();
       const password = document.getElementById('reg-password').value;
 
       if (!SAFE_USERNAME_RE.test(username)) {
-        return showAlert(
-          'El usuario solo puede contener letras, números y guion bajo (_). No se permiten caracteres especiales.',
-          'error'
-        );
+        return showAlert('El usuario solo puede contener letras, números y guion bajo (_).', 'error');
       }
 
       try {
@@ -153,7 +205,7 @@
           return showAlert(data.error || `Error ${res.status} al registrar usuario`, 'error');
         }
 
-        showAlert(`Usuario "${data.username}" creado con éxito (ID: ${data.userId}). Ahora puedes iniciar sesión.`, 'success');
+        showAlert(`Usuario "${data.username}" creado con éxito. Ya puedes iniciar sesión.`, 'success');
         document.getElementById('login-username').value = data.username;
         document.getElementById('login-password').value = '';
         document.getElementById('register-form').reset();
@@ -162,17 +214,14 @@
       }
     });
 
-    // Login
+    // Login Local
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const username = document.getElementById('login-username').value.trim().toLowerCase();
       const password = document.getElementById('login-password').value;
 
       if (!SAFE_USERNAME_RE.test(username)) {
-        return showAlert(
-          'El usuario solo puede contener letras, números y guion bajo (_). No se permiten caracteres especiales.',
-          'error'
-        );
+        return showAlert('El usuario solo puede contener letras, números y guion bajo (_).', 'error');
       }
 
       try {
@@ -196,6 +245,148 @@
       } catch (err) {
         showAlert(`No se pudo conectar al Servicio de Auth en ${getAuthUrl()}`, 'error');
       }
+    });
+
+    // ── Google Identity Services (Opción A) ──────────────────────────────────
+    let pendingGoogleIdToken = null;
+
+    function initGoogleSignIn() {
+      const clientId = getGoogleClientId();
+      const wrapper = document.getElementById('google-btn-wrapper');
+      const statusMsg = document.getElementById('google-status-msg');
+
+      if (!clientId || clientId.includes('tu_google_client_id')) {
+        wrapper.innerHTML = '';
+        statusMsg.textContent = 'Ingresa tu GOOGLE_CLIENT_ID en el panel de configuración inferior para habilitar el botón de Google.';
+        return;
+      }
+      statusMsg.textContent = '';
+
+      if (window.google && window.google.accounts && window.google.accounts.id) {
+        try {
+          window.google.accounts.id.initialize({
+            client_id: clientId,
+            callback: handleGoogleCredentialResponse,
+            auto_select: false
+          });
+          wrapper.innerHTML = '';
+          window.google.accounts.id.renderButton(
+            wrapper,
+            { theme: 'outline', size: 'large', text: 'signin_with', shape: 'rectangular', width: 280 }
+          );
+        } catch (e) {
+          console.error('[Google GSI Error]', e);
+          statusMsg.textContent = 'Error inicializando Google Sign-In: ' + e.message;
+        }
+      } else {
+        // Reintentar cuando el script gsi cargue
+        setTimeout(initGoogleSignIn, 300);
+      }
+    }
+
+    async function handleGoogleCredentialResponse(response) {
+      const idToken = response.credential;
+      if (!idToken) {
+        return showAlert('No se recibió la credencial de Google.', 'error');
+      }
+
+      pendingGoogleIdToken = idToken;
+
+      try {
+        const res = await fetch(`${getAuthUrl()}/auth/google`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': 'true'
+          },
+          body: JSON.stringify({ idToken })
+        });
+        const data = await res.json();
+
+        // 200: Usuario existente o autenticado directamente
+        if (res.status === 200 && data.token) {
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('username', data.username);
+          window.location.href = 'lobby.html';
+          return;
+        }
+
+        // 409 username_required: Primer login con Google
+        if (res.status === 409 && data.error === 'username_required') {
+          showGoogleUsernameModal(data.hint || '');
+          return;
+        }
+
+        if (!res.ok) {
+          showAlert(data.error || 'Error al autenticar con Google.', 'error');
+        }
+      } catch (err) {
+        showAlert(`No se pudo conectar con el Servicio de Auth en ${getAuthUrl()}`, 'error');
+      }
+    }
+
+    function showGoogleUsernameModal(hint) {
+      const modal = document.getElementById('google-username-modal');
+      const input = document.getElementById('google-username-input');
+      modalAlertBox.className = 'alert';
+      input.value = hint || '';
+      modal.style.display = 'flex';
+      input.focus();
+    }
+
+    function hideGoogleUsernameModal() {
+      document.getElementById('google-username-modal').style.display = 'none';
+      pendingGoogleIdToken = null;
+    }
+
+    document.getElementById('cancel-google-modal-btn').addEventListener('click', hideGoogleUsernameModal);
+
+    // Formulario de confirmación de username para usuario de Google
+    document.getElementById('google-username-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('google-username-input').value.trim().toLowerCase();
+
+      if (!SAFE_USERNAME_RE.test(username)) {
+        return showModalAlert('El usuario solo puede contener letras, números y guion bajo (_).', 'error');
+      }
+      if (username.length < 3 || username.length > 32) {
+        return showModalAlert('El username debe tener entre 3 y 32 caracteres.', 'error');
+      }
+
+      try {
+        const res = await fetch(`${getAuthUrl()}/auth/google`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': 'true'
+          },
+          body: JSON.stringify({
+            idToken: pendingGoogleIdToken,
+            username: username
+          })
+        });
+        const data = await res.json();
+
+        if (res.status === 409 && data.error === 'username_taken') {
+          return showModalAlert('Ese nombre de usuario ya está registrado. Por favor elige otro.', 'error');
+        }
+
+        if (res.status === 200 && data.token) {
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('username', data.username);
+          window.location.href = 'lobby.html';
+          return;
+        }
+
+        showModalAlert(data.error || 'Error al completar el registro con Google', 'error');
+      } catch (err) {
+        showModalAlert(`Error de conexión: ${err.message}`, 'error');
+      }
+    });
+
+    // Cargar botón de Google cuando el DOM esté listo
+    window.addEventListener('DOMContentLoaded', () => {
+      initGoogleSignIn();
     });
   </script>
 </body>
