@@ -1,5 +1,5 @@
-require('dotenv').config();
 const path = require('node:path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const Database = require('better-sqlite3');
@@ -13,7 +13,9 @@ const SAFE_USERNAME_RE = /^[a-zA-Z0-9_]+$/;
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 const BCRYPT_ROUNDS = Math.max(10, Number(process.env.BCRYPT_ROUNDS || 10));
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'users.db');
+const DB_PATH = process.env.DB_PATH
+  ? path.resolve(__dirname, process.env.DB_PATH)
+  : path.join(__dirname, 'users.db');
 
 if (!JWT_SECRET) {
   console.error('[ERROR] JWT_SECRET no está definida en el archivo .env');
@@ -25,14 +27,18 @@ const db = new Database(DB_PATH);
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE NOT NULL COLLATE NOCASE,
     password_hash TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  )
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users(LOWER(username));
 `);
 
+// Asegurar que registros existentes queden normalizados en minúsculas
+db.exec(`UPDATE users SET username = LOWER(username) WHERE username != LOWER(username);`);
+
 const findUserByUsernameStmt = db.prepare(
-  'SELECT id, username, password_hash, created_at FROM users WHERE username = ?'
+  'SELECT id, username, password_hash, created_at FROM users WHERE LOWER(username) = ?'
 );
 const insertUserStmt = db.prepare(
   'INSERT INTO users (username, password_hash) VALUES (?, ?)'
@@ -70,7 +76,8 @@ app.post('/register', async (req, res) => {
       });
     }
 
-    const cleanUsername = username.trim();
+    // Convertir username siempre a minúsculas independientemente de lo que escriba el usuario
+    const cleanUsername = username.trim().toLowerCase();
 
     if (!SAFE_USERNAME_RE.test(cleanUsername)) {
       return res.status(400).json({
@@ -90,6 +97,7 @@ app.post('/register', async (req, res) => {
       });
     }
 
+    // Verificar duplicados (búsqueda insensible a mayúsculas/minúsculas)
     const existing = findUserByUsernameStmt.get(cleanUsername);
     if (existing) {
       return res.status(409).json({
@@ -108,7 +116,12 @@ app.post('/register', async (req, res) => {
       username: cleanUsername
     });
   } catch (err) {
-    if (err && err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (
+      err &&
+      (err.code === 'SQLITE_CONSTRAINT_UNIQUE' ||
+        err.code === 'SQLITE_CONSTRAINT' ||
+        (err.message && err.message.includes('UNIQUE constraint failed')))
+    ) {
       return res.status(409).json({
         error: 'El nombre de usuario ya está registrado'
       });
@@ -135,7 +148,8 @@ app.post('/login', async (req, res) => {
       });
     }
 
-    const cleanUsername = username.trim();
+    // Login insensible a mayúsculas/minúsculas
+    const cleanUsername = username.trim().toLowerCase();
 
     if (!SAFE_USERNAME_RE.test(cleanUsername)) {
       return res.status(400).json({

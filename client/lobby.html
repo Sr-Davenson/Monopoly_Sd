@@ -146,7 +146,7 @@
         infoDiv.appendChild(dot);
         infoDiv.appendChild(nameSpan);
 
-        if (p.username === currentUsername) {
+        if (p.username && currentUsername && p.username.toLowerCase() === currentUsername.toLowerCase()) {
           li.classList.add('is-me');
           const youBadge = document.createElement('span');
           youBadge.className = 'badge';

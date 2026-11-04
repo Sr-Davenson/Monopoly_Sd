@@ -115,10 +115,20 @@
     // Solo letras, dígitos y guion bajo: evita caracteres especiales / inyecciones SQL
     const SAFE_USERNAME_RE = /^[a-zA-Z0-9_]+$/;
 
+    // Normalizar automáticamente a minúsculas cuando el usuario deja el campo
+    ['reg-username', 'login-username'].forEach((id) => {
+      const input = document.getElementById(id);
+      if (input) {
+        input.addEventListener('blur', () => {
+          input.value = input.value.trim().toLowerCase();
+        });
+      }
+    });
+
     // Registro
     document.getElementById('register-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const username = document.getElementById('reg-username').value.trim();
+      const username = document.getElementById('reg-username').value.trim().toLowerCase();
       const password = document.getElementById('reg-password').value;
 
       if (!SAFE_USERNAME_RE.test(username)) {
@@ -155,7 +165,7 @@
     // Login
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const username = document.getElementById('login-username').value.trim();
+      const username = document.getElementById('login-username').value.trim().toLowerCase();
       const password = document.getElementById('login-password').value;
 
       if (!SAFE_USERNAME_RE.test(username)) {
