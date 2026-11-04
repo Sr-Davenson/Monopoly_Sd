@@ -56,7 +56,9 @@
       localStorage.getItem('CUSTOM_COORDINATOR_WS') || defaultConfig.COORDINATOR_WS
     ).replace(/\/+$/, '');
 
-    let manualLogout = false;
+    // Flag que indica si la desconexión fue intencional (logout o token expirado conocido)
+    let intentionalClose = false;
+
     const ws = new WebSocket(`${COORDINATOR_WS}/connect?token=${encodeURIComponent(token)}`);
 
     function renderPlayers(players) {
@@ -108,6 +110,10 @@
       }
     }
 
+    ws.onopen = () => {
+      console.log('[WS] Conectado al coordinador.');
+    };
+
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
@@ -119,33 +125,42 @@
       }
     };
 
+    ws.onerror = (err) => {
+      console.error('[WS] Error de conexión:', err);
+    };
+
     ws.onclose = (event) => {
-      if (manualLogout) {
+      // Si fue un cierre intencional (logout o token expirado conocido), no mostrar alerta
+      if (intentionalClose) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
         window.location.href = 'login.html';
         return;
       }
 
       let reasonMsg = 'La conexión con el coordinador se cerró inesperadamente.';
       if (event.code === 4001 || event.reason === 'invalid token') {
-        reasonMsg = 'Sesión terminada: Token inválido o expirado (código 4001).';
+        reasonMsg = 'Sesión terminada: Token inválido o expirado. Por favor vuelve a iniciar sesión.';
       } else if (event.code === 4002) {
         reasonMsg = 'Tu sesión fue desconectada porque abriste el juego en otra pestaña.';
       }
 
-      alert(reasonMsg);
       sessionStorage.setItem('session_message', reasonMsg);
       localStorage.removeItem('token');
       localStorage.removeItem('username');
       window.location.href = 'login.html';
     };
 
+    // Botón Cerrar sesión
     document.getElementById('logout-btn').addEventListener('click', () => {
-      manualLogout = true;
+      intentionalClose = true;
       localStorage.removeItem('token');
       localStorage.removeItem('username');
       sessionStorage.setItem('session_message', 'Has cerrado sesión correctamente.');
+
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close(1000, 'user logout');
+        // onclose se encargará de redirigir
       } else {
         window.location.href = 'login.html';
       }
