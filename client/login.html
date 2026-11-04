@@ -112,11 +112,21 @@
       showAlert('URLs restablecidas a los valores del servidor (.env).', 'success');
     });
 
+    // Solo letras, dígitos y guion bajo: evita caracteres especiales / inyecciones SQL
+    const SAFE_USERNAME_RE = /^[a-zA-Z0-9_]+$/;
+
     // Registro
     document.getElementById('register-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const username = document.getElementById('reg-username').value.trim();
       const password = document.getElementById('reg-password').value;
+
+      if (!SAFE_USERNAME_RE.test(username)) {
+        return showAlert(
+          'El usuario solo puede contener letras, números y guion bajo (_). No se permiten caracteres especiales.',
+          'error'
+        );
+      }
 
       try {
         const res = await fetch(`${getAuthUrl()}/register`, {
@@ -147,6 +157,13 @@
       e.preventDefault();
       const username = document.getElementById('login-username').value.trim();
       const password = document.getElementById('login-password').value;
+
+      if (!SAFE_USERNAME_RE.test(username)) {
+        return showAlert(
+          'El usuario solo puede contener letras, números y guion bajo (_). No se permiten caracteres especiales.',
+          'error'
+        );
+      }
 
       try {
         const res = await fetch(`${getAuthUrl()}/login`, {

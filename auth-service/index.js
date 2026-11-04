@@ -7,6 +7,9 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 
 const PORT = Number(process.env.PORT || 4000);
+
+// Solo letras, dígitos y guion bajo — bloquea caracteres especiales / inyecciones
+const SAFE_USERNAME_RE = /^[a-zA-Z0-9_]+$/;
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 const BCRYPT_ROUNDS = Math.max(10, Number(process.env.BCRYPT_ROUNDS || 10));
@@ -69,6 +72,12 @@ app.post('/register', async (req, res) => {
 
     const cleanUsername = username.trim();
 
+    if (!SAFE_USERNAME_RE.test(cleanUsername)) {
+      return res.status(400).json({
+        error: 'El username solo puede contener letras, números y guion bajo (_). No se permiten caracteres especiales.'
+      });
+    }
+
     if (cleanUsername.length < 3 || cleanUsername.length > 32) {
       return res.status(400).json({
         error: 'El username debe tener entre 3 y 32 caracteres'
@@ -127,6 +136,13 @@ app.post('/login', async (req, res) => {
     }
 
     const cleanUsername = username.trim();
+
+    if (!SAFE_USERNAME_RE.test(cleanUsername)) {
+      return res.status(400).json({
+        error: 'El username solo puede contener letras, números y guion bajo (_). No se permiten caracteres especiales.'
+      });
+    }
+
     const user = findUserByUsernameStmt.get(cleanUsername);
 
     if (!user) {
