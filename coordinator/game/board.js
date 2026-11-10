@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Tablero: 40 casillas. Las 4 esquinas son fijas y cada lado (9 casillas)
-// pertenece a un integrante.
+// pertenece a un integrante y a su mundo.
 //
 // Estructura de cada lado (k = posición dentro del lado, 1..9):
 //   k1 Propiedad (grupo A)      k6 Propiedad (grupo B)
@@ -11,9 +11,7 @@
 //
 // Todos los lados tienen la misma estructura para que cada integrante tenga
 // una sección equivalente. Solo cambian los precios (más caros al avanzar).
-//
-// Los nombres entre [corchetes] son plantillas para que cada integrante los
-// reemplace con su temática.
+// Los nombres de cada lado están en WORLDS (uno por integrante).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const economy = require('./economy');
@@ -22,7 +20,7 @@ const { MEMBERS } = require('./members');
 const SPACE = Object.freeze({
   START:        'start',
   JAIL:         'jail',
-  REST:         'rest',          // "Descanso": cobra el Fondo de Donaciones
+  REST:         'rest',          // "Taberna": cobra el Fondo de Donaciones
   GO_TO_JAIL:   'go_to_jail',
   PROPERTY:     'property',
   TRANSPORT:    'transport',
@@ -37,34 +35,84 @@ const BOARD_SIZE     = 40;
 
 // Dos tonos por integrante: grupo A y grupo B.
 const GROUP_COLORS = [
-  '#ef4444', '#f97316', // David
-  '#22c55e', '#14b8a6', // Jossef
-  '#3b82f6', '#6366f1', // Sebastian
-  '#a855f7', '#ec4899'  // Santiago
+  '#d94841', '#f08c2e', // David     — Piratas    (rojo bandera, naranja ron)
+  '#34b37a', '#8b6be0', // Jossef    — Fantasía   (esmeralda, amatista)
+  '#6fa8dc', '#3b6fb6', // Sebastian — Vikingos   (hielo, fiordo profundo)
+  '#c08a4a', '#a3456b'  // Santiago  — Literatura (sepia, borgoña)
 ];
 
 const CORNERS = [
-  { type: SPACE.START,      name: 'Salida' },
-  { type: SPACE.JAIL,       name: 'Cárcel' },
-  { type: SPACE.REST,       name: 'Descanso' },
-  { type: SPACE.GO_TO_JAIL, name: 'Ve a la cárcel' }
+  { type: SPACE.START,      name: 'Salida',             icon: '⚑' },
+  { type: SPACE.JAIL,       name: 'Calabozo',           icon: '⛓' },
+  { type: SPACE.REST,       name: 'Taberna (Descanso)', icon: '🍺' },
+  { type: SPACE.GO_TO_JAIL, name: 'Ve al Calabozo',     icon: '⚔' }
 ];
 
-// Placeholder de donación: a quién se le dona lo define cada integrante.
-const DONATION_TARGETS = [
-  '[Personaje de David]',
-  '[Personaje de Jossef]',
-  '[Personaje de Sebastian]',
-  '[Personaje de Santiago]'
+// Nombres de cada lado. Orden de las propiedades: A1, A2, B1, B2, B3.
+const WORLDS = [
+  { // David — Piratas
+    groupA: 'Puertos Libres',
+    groupB: 'Islas Malditas',
+    props: [
+      { name: 'Isla Tortuga',                 icon: '🐢' },
+      { name: 'Bahía de Cartagena de Indias', icon: '🏰' },
+      { name: 'Port Royal',                   icon: '⚓' },
+      { name: 'Isla Calavera',                icon: '💀' },
+      { name: 'Isla del Tesoro de Flint',     icon: '💰' }
+    ],
+    transport: { name: "Galeón Queen Anne's Revenge", icon: '⛵' },
+    donation:  'el Cofre de Davy Jones'
+  },
+  { // Jossef — Fantasía
+    groupA: 'Bosques Feéricos',
+    groupB: 'Reinos de Leyenda',
+    props: [
+      { name: 'Bosque de Brocelianda',  icon: '🌲' },
+      { name: 'Árbol de los Elfos',     icon: '🌳' },
+      { name: 'Torre de Merlín',        icon: '🔮' },
+      { name: 'Ávalon, la Isla Velada', icon: '🌫' },
+      { name: 'Castillo de Camelot',    icon: '👑' }
+    ],
+    transport: { name: 'Grifo Mensajero',    icon: '🦅' },
+    service:   { name: 'Pozo de los Deseos', icon: '⛲' },
+    donation:  'el Dragón dormido'
+  },
+  { // Sebastian — Vikingos
+    groupA: 'Rutas de Saqueo',
+    groupB: 'Camino a Asgard',
+    props: [
+      { name: 'Monasterio de Lindisfarne', icon: '⛪' },
+      { name: 'Mercado de Hedeby',         icon: '⚖' },
+      { name: 'Aldea de Kattegat',         icon: '🛖' },
+      { name: 'Bifröst, Puente Arcoíris',  icon: '🌈' },
+      { name: 'Valhalla, Salón de Odín',   icon: '🛡' }
+    ],
+    transport: { name: 'Sleipnir, corcel de ocho patas', icon: '🐎' },
+    donation:  'Odín (ofrenda en Uppsala)'
+  },
+  { // Santiago — Literatura
+    groupA: 'Rincones de Praga y Étretat',
+    groupB: 'Mundos Imposibles',
+    props: [
+      { name: 'Habitación de Gregorio Samsa',    icon: '🪳' },
+      { name: 'La Aguja Hueca de Arsène Lupin',  icon: '🗝' },
+      { name: 'Granja Manor del Sr. Jones',      icon: '🐖' },
+      { name: 'Centro de Incubación de Londres', icon: '🧪' },
+      { name: 'Macondo',                         icon: '🦋' }
+    ],
+    transport: { name: 'Globo de Phileas Fogg', icon: '🎈' },
+    service:   { name: 'Biblioteca de Babel',   icon: '📚' },
+    donation:  'Sísifo (para una piedra nueva)'
+  }
 ];
 
 function buildGroups() {
   return economy.GROUP_PRICES.map((g, index) => {
     const member = MEMBERS[Math.floor(index / 2)];
-    const letter = index % 2 === 0 ? 'A' : 'B';
+    const world  = WORLDS[Math.floor(index / 2)];
     return {
       id: index,
-      name: `[Grupo ${letter} de ${member.name}]`,
+      name: index % 2 === 0 ? world.groupA : world.groupB,
       color: GROUP_COLORS[index],
       memberId: member.id,
       houseCost: g.houseCost,
@@ -78,19 +126,22 @@ function buildBoard() {
   const spaces = [];
 
   for (let side = 0; side < 4; side++) {
-    const member = MEMBERS[side];
-    const base   = side * 10;
-    const gA     = side * 2;
-    const gB     = side * 2 + 1;
+    const member  = MEMBERS[side];
+    const world   = WORLDS[side];
+    const base    = side * 10;
+    const gA      = side * 2;
+    const gB      = side * 2 + 1;
     const pricesA = economy.GROUP_PRICES[gA].prices;
     const pricesB = economy.GROUP_PRICES[gB].prices;
+    const [a1, a2, b1, b2, b3] = world.props;
 
     // Esquina que abre el lado
     spaces.push({ ...CORNERS[side], side, memberId: null });
 
-    const prop = (group, idx, price) => ({
+    const prop = (group, info, price) => ({
       type: SPACE.PROPERTY,
-      name: `[Propiedad ${group % 2 === 0 ? 'A' : 'B'}${idx} de ${member.name}]`,
+      name: info.name,
+      icon: info.icon,
       group,
       price,
       houseCost: groups[group].houseCost,
@@ -98,22 +149,23 @@ function buildBoard() {
     });
 
     const sideSpaces = [
-      prop(gA, 1, pricesA[0]),
-      { type: SPACE.CARD_GENERAL, name: 'Tarjeta General' },
-      prop(gA, 2, pricesA[1]),
+      prop(gA, a1, pricesA[0]),
+      { type: SPACE.CARD_GENERAL, name: 'Tarjeta General', icon: '📜' },
+      prop(gA, a2, pricesA[1]),
       {
         type: SPACE.DONATION,
-        name: `Dona a ${DONATION_TARGETS[side]}`,
+        name: `Dona a ${world.donation}`,
+        icon: '♥',
         amount: economy.DONATION_AMOUNTS[side],
-        target: DONATION_TARGETS[side]
+        target: world.donation
       },
-      { type: SPACE.TRANSPORT, name: `[Transporte de ${member.name}]`, price: economy.TRANSPORT_PRICE },
-      prop(gB, 1, pricesB[0]),
+      { type: SPACE.TRANSPORT, name: world.transport.name, icon: world.transport.icon, price: economy.TRANSPORT_PRICE },
+      prop(gB, b1, pricesB[0]),
       side % 2 === 0
-        ? { type: SPACE.CARD_SPECIAL, name: 'Tarjeta Especial' }
-        : { type: SPACE.SERVICE, name: `[Servicio de ${member.name}]`, price: economy.SERVICE_PRICE },
-      prop(gB, 2, pricesB[1]),
-      prop(gB, 3, pricesB[2])
+        ? { type: SPACE.CARD_SPECIAL, name: 'Tarjeta Especial', icon: '✶' }
+        : { type: SPACE.SERVICE, name: world.service.name, icon: world.service.icon, price: economy.SERVICE_PRICE },
+      prop(gB, b2, pricesB[1]),
+      prop(gB, b3, pricesB[2])
     ];
 
     for (const s of sideSpaces) {

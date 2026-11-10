@@ -13,7 +13,7 @@ const crypto = require('node:crypto');
 const eco = require('./economy');
 const { SPACE, SPACES, GROUPS, BOARD_SIZE, JAIL_POSITION, isOwnable } = require('./board');
 const { DECKS } = require('./cards');
-const { findTheme, starterSkin } = require('./themes');
+const { findTheme, findSkin, starterSkin } = require('./themes');
 
 class GameError extends Error {}
 
@@ -75,6 +75,7 @@ class MonopolyGame {
     this.lastCard   = null;
     this.log        = [];
     this.version    = 0;
+    this.matchId    = null;            // id único de cada partida (para las misiones)
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -141,10 +142,15 @@ class MonopolyGame {
   }
 
   // ── Sala de espera ─────────────────────────────────────────────────────────
-  join(id, username, themeId) {
+  // skinId es opcional: si no se envía se usa la ficha inicial de la temática.
+  // Que la ficha esté DESBLOQUEADA lo valida el coordinador (necesita el
+  // progreso del usuario, que vive en el auth-service).
+  join(id, username, themeId, skinId) {
     id = String(id);
     const theme = findTheme(themeId);
     if (!theme) throw new GameError('Temática inválida');
+    const skin = skinId ? findSkin(theme, skinId) : starterSkin(theme);
+    if (!skin) throw new GameError('Esa ficha no pertenece a la temática elegida');
     const existing = this.getPlayer(id);
 
     if (this.phase !== 'lobby') {
@@ -152,10 +158,10 @@ class MonopolyGame {
       throw new GameError('La partida ya comenzó');
     }
 
-    // En la sala se puede cambiar de temática; al iniciar queda fija.
+    // En la sala se puede cambiar de temática o ficha; al iniciar queda fija.
     if (existing) {
       existing.themeId = theme.id;
-      existing.skin = { ...starterSkin(theme) };
+      existing.skin = { ...skin };
       return;
     }
 
@@ -166,7 +172,7 @@ class MonopolyGame {
       id,
       username,
       themeId: theme.id,
-      skin: { ...starterSkin(theme) },
+      skin: { ...skin },
       color: PLAYER_COLORS.find(c => !used.has(c)),
       money: eco.STARTING_MONEY,
       position: 0,
@@ -174,7 +180,8 @@ class MonopolyGame {
       jailTurns: 0,
       jailCards: [],
       bankrupt: false,
-      connected: true
+      connected: true,
+      stats: { bought: 0, built: 0 }   // para las misiones de desbloqueo
     });
     if (!this.hostId) this.hostId = id;
     this.addLog(`${username} se unió con la temática ${theme.name}`);
@@ -197,6 +204,7 @@ class MonopolyGame {
     }
     this.players = shuffle(this.players, this.rng);
     this.phase = 'playing';
+    this.matchId = crypto.randomUUID();
     this.addLog(`¡Comienza la partida! Orden: ${this.players.map(p => p.username).join(', ')}`);
     this.beginTurn(this.players[0]);
   }
@@ -204,11 +212,13 @@ class MonopolyGame {
   restart(id) {
     if (this.phase !== 'finished') throw new GameError('La partida no ha terminado');
     if (String(id) !== this.hostId) throw new GameError('Solo el anfitrión puede reiniciar');
-    const keep = this.players.map(p => ({ id: p.id, username: p.username, themeId: p.themeId, connected: p.connected }));
+    const keep = this.players.map(p => ({ id: p.id, username: p.username, themeId: p.themeId, skinId: p.skin.id, connected: p.connected }));
     const host = this.hostId;
+    const version = this.version;
     this.reset();
+    this.version = version;            // la versión nunca retrocede (replicación)
     for (const k of keep) {
-      this.join(k.id, k.username, k.themeId);
+      this.join(k.id, k.username, k.themeId, k.skinId);
       this.getPlayer(k.id).connected = k.connected;
     }
     this.hostId = host;
@@ -265,7 +275,7 @@ class MonopolyGame {
       if (isDouble) {
         p.inJail = false;
         p.jailTurns = 0;
-        this.addLog(`${p.username} sale de la cárcel con dobles`);
+        this.addLog(`${p.username} sale del calabozo con dobles`);
         this.moveBy(p, d1 + d2);
         this.resolveLanding(p);
       } else {
@@ -277,7 +287,7 @@ class MonopolyGame {
           this.addLog(`${p.username} cumplió ${eco.MAX_JAIL_TURNS} turnos y paga la multa de ${eco.JAIL_FINE}`);
           this.charge(p, eco.JAIL_FINE, [{ id: null, amount: eco.JAIL_FINE }]);
         } else {
-          this.addLog(`${p.username} sigue en la cárcel (intento ${p.jailTurns}/${eco.MAX_JAIL_TURNS})`);
+          this.addLog(`${p.username} sigue en el calabozo (intento ${p.jailTurns}/${eco.MAX_JAIL_TURNS})`);
         }
       }
       this.updateStage();
@@ -326,7 +336,7 @@ class MonopolyGame {
     p.inJail = true;
     p.jailTurns = 0;
     this.turn.rollAgain = false;
-    this.addLog(`${p.username} va a la cárcel`);
+    this.addLog(`${p.username} va al calabozo`);
   }
 
   // ── Casillas ───────────────────────────────────────────────────────────────
@@ -516,6 +526,7 @@ class MonopolyGame {
     }
     p.money -= space.price;
     this.properties[space.id].ownerId = p.id;
+    p.stats.bought++;
     this.turn.pendingBuy = null;
     this.addLog(`${p.username} compró ${space.name} por ${space.price}`);
     this.updateStage();
@@ -534,24 +545,24 @@ class MonopolyGame {
   payJail(id) {
     const p = this.requireTurn(id);
     this.requireStage('roll');
-    if (!p.inJail) throw new GameError('No estás en la cárcel');
+    if (!p.inJail) throw new GameError('No estás en el calabozo');
     if (p.money < eco.JAIL_FINE) throw new GameError('No te alcanza para la multa');
     p.money -= eco.JAIL_FINE;
     p.inJail = false;
     p.jailTurns = 0;
-    this.addLog(`${p.username} pagó ${eco.JAIL_FINE} y sale de la cárcel`);
+    this.addLog(`${p.username} pagó ${eco.JAIL_FINE} y sale del calabozo`);
   }
 
   useJailCard(id) {
     const p = this.requireTurn(id);
     this.requireStage('roll');
-    if (!p.inJail) throw new GameError('No estás en la cárcel');
+    if (!p.inJail) throw new GameError('No estás en el calabozo');
     const card = p.jailCards.pop();
-    if (!card) throw new GameError('No tienes cartas para salir de la cárcel');
+    if (!card) throw new GameError('No tienes cartas para salir del calabozo');
     this.decks[card.deck].push(card.index);
     p.inJail = false;
     p.jailTurns = 0;
-    this.addLog(`${p.username} usa su carta y sale de la cárcel`);
+    this.addLog(`${p.username} usa su carta y sale del calabozo`);
   }
 
   // ── Construcción e hipotecas (solo en tu turno) ────────────────────────────
@@ -570,6 +581,7 @@ class MonopolyGame {
     if (p.money < space.houseCost) throw new GameError(`No te alcanza (${space.houseCost})`);
     p.money -= space.houseCost;
     prop.level++;
+    p.stats.built++;
     this.addLog(`${p.username} construyó en ${space.name} (${prop.level === 5 ? 'hotel' : prop.level + ' casa(s)'})`);
   }
 
@@ -631,7 +643,7 @@ class MonopolyGame {
 
   validateSide(player, side) {
     if (player.money < side.money) throw new GameError(`${player.username} no tiene ${side.money}`);
-    if (player.jailCards.length < side.jailCards) throw new GameError(`${player.username} no tiene esas cartas de cárcel`);
+    if (player.jailCards.length < side.jailCards) throw new GameError(`${player.username} no tiene esas cartas del calabozo`);
     for (const sid of side.properties) {
       const space = SPACES[sid];
       if (this.properties[sid].ownerId !== player.id) {
@@ -793,7 +805,7 @@ class MonopolyGame {
   // ── Despacho de acciones ───────────────────────────────────────────────────
   handle(userId, username, action, data = {}) {
     const actions = {
-      join:            () => this.join(userId, username, data.themeId),
+      join:            () => this.join(userId, username, data.themeId, data.skinId),
       leave:           () => this.leave(userId),
       start:           () => this.start(userId),
       restart:         () => this.restart(userId),
@@ -852,15 +864,62 @@ class MonopolyGame {
     };
   }
 
+  // ── Replicación entre coordinadores ────────────────────────────────────────
+  // serialize() incluye TODO el estado interno (mazos, contador de
+  // intercambios, estadísticas...) para que otro coordinador pueda continuar
+  // la partida exactamente donde quedó. toJSON() es solo la vista pública.
+  serialize() {
+    return JSON.parse(JSON.stringify({
+      phase: this.phase,
+      players: this.players,
+      hostId: this.hostId,
+      properties: this.properties,
+      decks: this.decks,
+      pot: this.pot,
+      turn: this.turn,
+      trade: this.trade,
+      nextTrade: this.nextTrade,
+      winnerId: this.winnerId,
+      lastCard: this.lastCard,
+      log: this.log,
+      version: this.version,
+      matchId: this.matchId
+    }));
+  }
+
+  load(snapshot) {
+    const data = JSON.parse(JSON.stringify(snapshot));
+    for (const key of ['phase', 'players', 'hostId', 'properties', 'decks', 'pot', 'turn', 'trade',
+                       'nextTrade', 'winnerId', 'lastCard', 'log', 'version', 'matchId']) {
+      if (key in data) this[key] = data[key];
+    }
+  }
+
+  // Resultado de la partida para las misiones (solo cuando terminó).
+  results() {
+    if (this.phase !== 'finished') return null;
+    return {
+      matchId: this.matchId,
+      players: this.players.map(p => ({
+        userId: p.id,
+        won: p.id === this.winnerId,
+        propertiesBought: p.stats ? p.stats.bought : 0,
+        buildingsBuilt: p.stats ? p.stats.built : 0
+      }))
+    };
+  }
+
   // Datos estáticos que el cliente necesita una sola vez
   static config() {
-    const { THEMES } = require('./themes');
+    const { THEMES, RARITIES, STATS } = require('./themes');
     const { MEMBERS } = require('./members');
     return {
       spaces: SPACES,
       groups: GROUPS,
       members: MEMBERS,
       themes: THEMES,
+      rarities: RARITIES,
+      stats: STATS,
       economy: {
         currency: eco.CURRENCY,
         startingMoney: eco.STARTING_MONEY,
