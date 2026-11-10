@@ -3,496 +3,832 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Monopoly SD — Lobby y Juego en Vivo</title>
+  <title>Cuatro Mundos — Lobby</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700&family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@500;700;900&display=swap" />
   <link rel="stylesheet" href="styles.css" />
-  <script src="config.js"></script>
   <style>
-    /* Indicador de estado de la conexión WebSocket */
-    .conn-status {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.3rem 0.75rem;
-      border-radius: 999px;
-      font-size: 0.82rem;
-      border: 1px solid var(--border);
-      background-color: var(--bg);
-      color: var(--text-muted);
-    }
-    .conn-status .status-dot { transition: background-color 0.3s, box-shadow 0.3s; }
+    .container.lobby { max-width: 1280px; }
+    .lobby .header { margin-bottom: 1.4rem; }
 
-    .conn-status[data-state="connecting"] { color: #fcd34d; border-color: rgba(245, 158, 11, 0.4); }
-    .conn-status[data-state="connecting"] .status-dot {
-      background-color: var(--warning);
-      box-shadow: 0 0 8px var(--warning);
-      animation: pulse 1s ease-in-out infinite;
+    /* Barra de estado */
+    .status-card { padding: 1rem 1.25rem; }
+    .status-card .user-badge strong { font-family: var(--font-head); color: var(--gold-2); }
+    .status-right { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+    .lost-banner {
+      margin-top: 0.8rem;
+      padding: 0.6rem 0.85rem;
+      border-radius: 10px;
+      background: rgba(232, 163, 61, 0.12);
+      border: 1px solid rgba(232, 163, 61, 0.45);
+      color: #f6d39a;
+      font-size: 0.92rem;
     }
 
-    .conn-status[data-state="connected"] { color: #6ee7b7; border-color: rgba(16, 185, 129, 0.4); }
-    .conn-status[data-state="connected"] .status-dot {
-      background-color: var(--success);
-      box-shadow: 0 0 8px var(--success);
+    /* Salas */
+    .rooms-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1rem;
     }
-
-    .conn-status[data-state="disconnected"] { color: #fca5a5; border-color: rgba(239, 68, 68, 0.4); }
-    .conn-status[data-state="disconnected"] .status-dot {
-      background-color: var(--danger);
-      box-shadow: none;
-    }
-
-    .player-item.is-me { border-color: rgba(16, 185, 129, 0.5); }
-
-    @keyframes pulse { 50% { opacity: 0.35; } }
-    @media (prefers-reduced-motion: reduce) {
-      .conn-status[data-state="connecting"] .status-dot { animation: none; }
-    }
-
-    /* Estilos del Canvas */
-    .canvas-container {
-      display: flex;
-      justify-content: center;
-      background: #0b1120;
-      border-radius: 8px;
-      padding: 0.5rem;
-      border: 1px solid var(--border);
+    .room-card {
+      --rc: var(--gold);
       position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      padding: 1.15rem;
+      border-radius: var(--radius);
+      background:
+        radial-gradient(28rem 12rem at 0% 0%, color-mix(in srgb, var(--rc) 18%, transparent), transparent 70%),
+        linear-gradient(180deg, var(--surface-2), var(--surface));
+      border: 1px solid color-mix(in srgb, var(--rc) 40%, var(--border));
+      box-shadow: var(--shadow);
+      min-width: 0;
+    }
+    .room-head { display: flex; align-items: center; gap: 0.75rem; }
+    .room-emblem {
+      width: 3rem; height: 3rem; flex: none;
+      display: grid; place-items: center;
+      font-size: 1.6rem;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--rc) 22%, var(--bg-2));
+      border: 1px solid color-mix(in srgb, var(--rc) 50%, transparent);
+    }
+    .room-title { min-width: 0; flex: 1; }
+    .room-title h3 { font-family: var(--font-head); font-size: 1.08rem; color: var(--text); }
+    .room-title .room-id { font-size: 0.78rem; color: var(--text-muted); }
+
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      padding: 0.22rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.78rem; font-weight: 700;
+      white-space: nowrap;
+      border: 1px solid;
+    }
+    .status-pill::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .status-pill.vacia       { color: var(--text-muted); border-color: var(--border); }
+    .status-pill.sin_iniciar { color: #f6d39a; border-color: rgba(232, 163, 61, 0.5); background: rgba(232, 163, 61, 0.1); }
+    .status-pill.en_curso    { color: #9fe3c2; border-color: rgba(79, 191, 139, 0.5); background: rgba(79, 191, 139, 0.1); }
+    .status-pill.en_curso::before { box-shadow: 0 0 8px currentColor; animation: pulse 1.4s ease-in-out infinite; }
+    .status-pill.finalizada  { color: #c9b8ff; border-color: rgba(139, 107, 224, 0.5); background: rgba(139, 107, 224, 0.1); }
+
+    .seats { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .seat {
+      width: 2.3rem; height: 2.3rem; border-radius: 50%;
+      border: 2px dashed var(--border);
+      display: grid; place-items: center;
+      color: var(--border); font-size: 0.8rem;
+    }
+    .seat.min { border-color: color-mix(in srgb, var(--rc) 45%, var(--border)); }
+    .seats .token-art { width: 2.3rem; height: 2.3rem; }
+    .seats .token-art.offline { opacity: 0.4; }
+    .room-meta { font-size: 0.88rem; color: var(--text-muted); }
+    .room-meta strong { color: var(--text); }
+
+    .room-players { list-style: none; display: flex; flex-direction: column; gap: 0.35rem; min-height: 2rem; }
+    .room-players li {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.9rem;
+      padding: 0.3rem 0.45rem;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.18);
+      min-width: 0;
+    }
+    .room-players li .pn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .room-players li.offline .pn { color: var(--text-muted); text-decoration: line-through; }
+    .room-players .empty { color: var(--text-muted); font-style: italic; background: none; padding-left: 0; }
+    .room-card .btn { margin-top: auto; }
+    .btn-ghost { background: transparent; color: var(--gold-2); border-color: rgba(217, 180, 90, 0.5); }
+    .btn-ghost:hover { background: rgba(217, 180, 90, 0.08); }
+
+    .coord-tag {
+      --cc: var(--gold);
+      flex: none;
+      font-size: 0.72rem;
+      font-family: var(--font-head);
+      font-weight: 700;
+      padding: 0.08rem 0.45rem;
+      border-radius: 6px;
+      color: var(--cc);
+      border: 1px solid color-mix(in srgb, var(--cc) 55%, transparent);
+      background: color-mix(in srgb, var(--cc) 12%, transparent);
+      white-space: nowrap;
     }
 
-    canvas#game-canvas {
-      background-color: #0f172a;
-      border: 1px solid #1e293b;
-      border-radius: 6px;
-      display: block;
-      max-width: 100%;
-      height: auto;
+    /* Plaza + jugadores */
+    .lobby-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr);
+      gap: 1rem;
+      margin-top: 2rem;
+      align-items: start;
     }
+    @media (max-width: 960px) { .lobby-grid { grid-template-columns: minmax(0, 1fr); } }
+
+    .plaza-head { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+    .plaza-head h2 { margin: 0; }
+    .controls {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 0.9rem;
+      padding: 0.55rem 0.8rem;
+      border-radius: 10px;
+      background: var(--bg-2);
+      border: 1px solid var(--border-soft);
+      margin-bottom: 0.7rem;
+    }
+    .controls label { font-size: 0.85rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.4rem; }
+    .controls select {
+      padding: 0.3rem 0.5rem; border-radius: 8px;
+      background: var(--surface); color: var(--text);
+      border: 1px solid var(--border); font: inherit; font-size: 0.9rem;
+      max-width: 13rem;
+    }
+    .controls input[type="color"] { width: 34px; height: 30px; border: none; border-radius: 6px; background: none; cursor: pointer; padding: 0; }
+    .hint { color: var(--text-muted); font-size: 0.86rem; margin-bottom: 0.7rem; }
+    .hint kbd {
+      font-family: var(--font-body); font-size: 0.8rem;
+      padding: 0.05rem 0.35rem; border-radius: 4px;
+      border: 1px solid var(--border); background: var(--bg-2); color: var(--text);
+    }
+    .canvas-frame {
+      border-radius: 12px;
+      padding: 6px;
+      background: linear-gradient(135deg, var(--pirate), var(--fantasy), var(--viking), var(--letters));
+    }
+    canvas#game-canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 8px;
+      background: #100e14;
+      touch-action: none;
+    }
+
+    .online-card .players-list { max-height: 34rem; overflow-y: auto; }
+    .player-item .where { font-size: 0.78rem; color: var(--text-muted); }
+    .player-item .right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2rem; flex: none; }
+
+    /* Colección */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.6rem;
+      margin-bottom: 1.2rem;
+    }
+    .stat {
+      padding: 0.7rem 0.85rem;
+      border-radius: 10px;
+      background: var(--bg-2);
+      border: 1px solid var(--border-soft);
+    }
+    .stat .v { font-family: var(--font-head); font-size: 1.6rem; font-weight: 700; color: var(--gold-2); font-variant-numeric: tabular-nums; }
+    .stat .l { font-size: 0.82rem; color: var(--text-muted); }
+    @media (max-width: 720px) { .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+    .collection {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 0.9rem;
+    }
+    .theme-col {
+      --wc: var(--gold);
+      padding: 0.9rem;
+      border-radius: 12px;
+      background: linear-gradient(180deg, color-mix(in srgb, var(--wc) 12%, var(--bg-2)), var(--bg-2));
+      border: 1px solid color-mix(in srgb, var(--wc) 35%, var(--border));
+    }
+    .theme-col h3 { font-family: var(--font-head); font-size: 1rem; color: var(--wc); }
+    .theme-col .tdesc { font-size: 0.82rem; color: var(--text-muted); margin: 0.2rem 0 0.7rem; }
+    .skin-row { display: flex; gap: 0.65rem; align-items: center; padding: 0.45rem 0; border-top: 1px solid var(--border-soft); }
+    .skin-row:first-of-type { border-top: none; }
+    .skin-row .sk { flex: 1; min-width: 0; }
+    .skin-row .sk-name { font-weight: 700; font-size: 0.92rem; }
+    .skin-row .sk-sub { font-size: 0.78rem; color: var(--text-muted); }
+    .skin-row.locked .sk-name { color: var(--text-muted); }
+    .progress { height: 6px; border-radius: 999px; background: var(--surface-hover); overflow: hidden; margin-top: 0.3rem; }
+    .progress > span { display: block; height: 100%; background: linear-gradient(90deg, var(--wc), var(--gold-2)); }
+    .rarity { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+    .rarity.common { color: var(--text-muted); }
+    .rarity.rare { color: #7fb8ef; }
+    .rarity.epic { color: #c3a6ff; }
+    .rarity.legendary { color: var(--gold-2); }
   </style>
+  <script src="config.js"></script>
+  <script src="tokens.js"></script>
+  <script src="net.js"></script>
 </head>
 <body>
-  <div class="container" style="max-width: 1000px;">
+  <div class="container lobby">
     <header class="header">
-      <h1>Monopoly SD — Juego en Vivo</h1>
-      <p>Servidor autoritativo a 20 Hz con sincronización WebSocket en tiempo real</p>
+      <div class="game-logo">
+        <span class="kicker">Monopoly SD · Lobby</span>
+        <h1>Cuatro Mundos</h1>
+        <div class="tagline">
+          <span class="t-pirate">Mares</span><span class="sep">·</span><span class="t-fantasy">Hechizos</span><span class="sep">·</span><span class="t-viking">Runas</span><span class="sep">·</span><span class="t-letters">Letras</span>
+        </div>
+      </div>
     </header>
 
-    <div class="card">
+    <!-- ── Estado de la sesión y del coordinador ──────────────────────────── -->
+    <section class="card status-card">
       <div class="top-bar">
         <div class="user-badge">
-          <span>Jugador actual: <strong id="current-username">...</strong></span>
-          <span id="conn-status" class="conn-status" data-state="connecting" role="status" aria-live="polite">
+          <span id="me-token"></span>
+          <span>Jugador: <strong id="current-username">...</strong></span>
+          <span id="conn-status" class="pill conn-status" data-state="connecting" role="status" aria-live="polite">
             <span class="status-dot"></span>
             <span id="conn-status-text">Conectando...</span>
           </span>
         </div>
-        <div style="display:flex;gap:0.6rem;flex-wrap:wrap">
+        <div class="status-right">
+          <span class="pill coord" title="Coordinador asignado por el auth-service (GET /coordinator)">Coordinador: <strong id="coord-id">—</strong></span>
+          <span class="pill" id="mesh-pill" title="Otros coordinadores con los que el tuyo está enlazado">Mesh: <strong id="mesh-peers">—</strong></span>
           <button id="logout-btn" type="button" class="btn btn-danger">Cerrar sesión</button>
         </div>
       </div>
+      <div id="lost-banner" class="lost-banner" role="status" hidden></div>
+    </section>
 
-      <!-- ── SECCIÓN CANVAS (TALLER 5) ────────────────────────────────────── -->
-      <section style="margin-top: 1rem; margin-bottom: 1.5rem;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.85rem; flex-wrap: wrap; gap: 0.75rem;">
-          <h2 style="margin: 0; font-size: 1.2rem;">Tablero en Vivo (Canvas 20 Hz)</h2>
+    <!-- ── Salas ────────────────────────────────────────────────────────────── -->
+    <h2 class="section-title">Salas de juego <small>3 salas simultáneas · mínimo 2 y máximo 6 jugadores por sala</small></h2>
+    <div id="rooms" class="rooms-grid" aria-live="polite">
+      <p class="text-muted">Conectando con el coordinador...</p>
+    </div>
 
-          <!-- Feature Extra: Selector de Color y Mood -->
-          <div style="display: flex; align-items: center; gap: 0.75rem; background: var(--bg); padding: 0.4rem 0.8rem; border-radius: 8px; border: 1px solid var(--border);">
-            <label for="player-color-picker" style="font-size: 0.85rem; color: var(--text-muted); font-weight: 500;">Color:</label>
-            <input type="color" id="player-color-picker" value="#3b82f6" title="Cambiar color de tu personaje" style="cursor: pointer; border: none; width: 32px; height: 32px; border-radius: 6px; background: none;" />
-
-            <label for="player-mood-picker" style="font-size: 0.85rem; color: var(--text-muted); font-weight: 500; margin-left: 0.5rem;">Mood:</label>
-            <select id="player-mood-picker" title="Selecciona tu emoji de estado" style="padding: 0.25rem 0.5rem; border-radius: 6px; background: var(--surface); color: var(--text); border: 1px solid var(--border); font-size: 0.9rem;">
-              <option value="🚀">🚀 Cohete</option>
-              <option value="👑">👑 Corona</option>
-              <option value="🎩">🎩 Monopoly</option>
-              <option value="🔥">🔥 Fuego</option>
-              <option value="⚡">⚡ Rayo</option>
-              <option value="⭐">⭐ Estrella</option>
-            </select>
-          </div>
+    <div class="lobby-grid">
+      <!-- ── Plaza (canvas en tiempo real) ────────────────────────────────── -->
+      <section class="card plaza-card">
+        <div class="plaza-head">
+          <h2>Plaza de los Cuatro Mundos</h2>
+          <span class="pill coord" id="tick-info">Tick: 20 Hz · Coordinador: <strong id="tick-coord">—</strong></span>
         </div>
 
-        <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem;">
-          💡 Controles: Usa las teclas <strong>W, A, S, D</strong> o las <strong>Flechas del teclado</strong> para moverte. El servidor calcula tu posición con <code>dt</code> a 20 Hz.
-        </p>
+        <div class="controls">
+          <label>Color <input type="color" id="player-color-picker" value="#d9b45a" title="Color del borde de tu ficha" /></label>
+          <label>Ficha
+            <select id="player-art-picker" title="Fichas que ya desbloqueaste"></select>
+          </label>
+          <label>Ánimo
+            <select id="player-mood-picker" title="Emoji sobre tu ficha">
+              <option value="">Ninguno</option>
+              <option value="⚓">⚓ Ancla</option>
+              <option value="🔮">🔮 Hechizo</option>
+              <option value="🪓">🪓 Hacha</option>
+              <option value="📖">📖 Libro</option>
+              <option value="👑">👑 Corona</option>
+              <option value="🔥">🔥 Fuego</option>
+              <option value="⭐">⭐ Estrella</option>
+            </select>
+          </label>
+        </div>
 
-        <div class="canvas-container">
-          <canvas id="game-canvas" width="800" height="600"></canvas>
+        <p class="hint">Muévete con <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> o las flechas. Ves a todos los jugadores de todos los coordinadores; la etiqueta bajo cada ficha indica a cuál está conectado.</p>
+
+        <div class="canvas-frame">
+          <canvas id="game-canvas" width="800" height="600" aria-label="Plaza: posición de los jugadores en tiempo real"></canvas>
         </div>
       </section>
 
-      <h2>
-        <span>Jugadores en línea</span>
-        <span class="badge" id="players-count">0 conectados</span>
-      </h2>
-
-      <ul id="players-list" class="players-list">
-        <li class="player-item">
-          <span class="text-muted">Conectando con el coordinador...</span>
-        </li>
-      </ul>
+      <!-- ── Jugadores en línea ───────────────────────────────────────────── -->
+      <section class="card online-card">
+        <h2><span>Jugadores en línea</span><span class="badge" id="players-count">0 conectados</span></h2>
+        <ul id="players-list" class="players-list">
+          <li class="player-item"><span class="text-muted">Conectando con el coordinador...</span></li>
+        </ul>
+      </section>
     </div>
+
+    <!-- ── Colección y misiones ─────────────────────────────────────────────── -->
+    <h2 class="section-title">Colección de fichas <small>Cada temática trae una ficha inicial; las demás se desbloquean con misiones</small></h2>
+    <section class="card">
+      <div id="stats" class="stats-row"></div>
+      <div id="collection" class="collection"><p class="text-muted">Cargando temáticas...</p></div>
+    </section>
   </div>
 
   <script>
-    // ── VARIABLE GLOBAL EXPUESTA PARA DEMO DE AUTORIDAD (DEMO 3) ──────────────
-    // Al modificar lastState en DevTools, demostramos que la trampa local no altera el servidor
+    // ── VARIABLE GLOBAL EXPUESTA PARA DEMO DE AUTORIDAD ──────────────────────
+    // Modificar lastState desde DevTools solo cambia esta pantalla: el servidor
+    // la sobrescribe en el siguiente tick.
     window.lastState = { t: Date.now(), players: [] };
 
-    // ── Token original leído al cargar la página ──────────────────────────────
-    const originalToken    = localStorage.getItem('token');
-    const currentUsername  = localStorage.getItem('username') || 'Jugador';
+    const originalToken   = localStorage.getItem('token');
+    const currentUsername = localStorage.getItem('username') || 'Jugador';
+    const $ = (id) => document.getElementById(id);
 
-    const defaultConfig = window.APP_CONFIG || {
-      AUTH_URL: 'https://onboard-pantyhose-written.ngrok-free.dev',
-      COORDINATOR_WS: 'wss://chatting-sustained-punctured.ngrok-free.dev'
+    let conn = null;
+    let myId = null;
+    let worldConfig = { width: 800, height: 600, playerRadius: 18, tickRate: 20 };
+    let gameConfig = null;      // temáticas, economía (game_config)
+    let rooms = [];
+    let players = [];
+    let mesh = null;
+    let progress = null;
+    let progressError = false;
+    let leaving = false;
+
+    const STATUS_LABEL = { vacia: 'Vacía', sin_iniciar: 'Sin iniciar', en_curso: 'En curso', finalizada: 'Finalizada' };
+    const ROOM_STYLE = {
+      kraken:    { emoji: '🐙', color: 'var(--pirate)' },
+      yggdrasil: { emoji: '🌳', color: 'var(--fantasy)' },
+      babel:     { emoji: '📚', color: 'var(--letters)' }
     };
+    const WORLD_COLOR = { david: 'var(--pirate)', jossef: 'var(--fantasy)', sebastian: 'var(--viking)', santiago: 'var(--letters)' };
 
-    const COORDINATOR_WS = (defaultConfig.COORDINATOR_WS || 'wss://chatting-sustained-punctured.ngrok-free.dev').replace(/\/+$/, '');
+    // Color estable por coordinador (para distinguirlos a simple vista)
+    const COORD_COLORS = ['#f2d48a', '#7fd1ae', '#8fbdf0', '#f0a58f', '#c9b8ff', '#f5b8d0'];
+    function coordColor(id) {
+      if (!id) return 'var(--text-muted)';
+      let h = 0;
+      for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+      return COORD_COLORS[h % COORD_COLORS.length];
+    }
 
-    // Parámetros del mundo recibidos en 'welcome'
-    let worldConfig = {
-      width: 800,
-      height: 600,
-      playerRadius: 15,
-      tickRate: 20
-    };
-
-    // ── Utilidades ────────────────────────────────────────────────────────────
-    let redirecting = false;
-
-    function goToLogin(message, keepSession = false) {
-      if (redirecting) return;
-      redirecting = true;
-      if (!keepSession) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('username');
+    function el(tag, attrs = {}, ...children) {
+      const node = document.createElement(tag);
+      for (const [k, v] of Object.entries(attrs)) {
+        if (v === undefined || v === null || v === false) continue;
+        if (k === 'class') node.className = v;
+        else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+        else if (k.startsWith('--')) node.style.setProperty(k, v);
+        else node.setAttribute(k, v === true ? '' : v);
       }
-      if (message) sessionStorage.setItem('session_message', message);
-      window.location.replace('login.html');
+      for (const c of children.flat()) {
+        if (c === null || c === undefined || c === false) continue;
+        node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+      }
+      return node;
+    }
+
+    function coordTag(id) {
+      return el('span', { class: 'coord-tag', '--cc': coordColor(id), title: `Conectado a ${id}` }, id || '—');
     }
 
     function setConnState(state, text) {
-      const el = document.getElementById('conn-status');
-      el.dataset.state = state;
-      document.getElementById('conn-status-text').textContent = text;
+      $('conn-status').dataset.state = state;
+      $('conn-status-text').textContent = text;
     }
 
-    function renderPlayersList(players) {
-      const listEl  = document.getElementById('players-list');
-      const countEl = document.getElementById('players-count');
-      countEl.textContent = `${players.length} ${players.length === 1 ? 'conectado' : 'conectados'}`;
-      listEl.innerHTML = '';
+    function allSkins() {
+      return gameConfig ? gameConfig.themes.flatMap(t => t.skins.map(s => ({ ...s, theme: t }))) : [];
+    }
 
-      if (players.length === 0) {
-        const emptyLi = document.createElement('li');
-        emptyLi.className = 'player-item';
-        emptyLi.textContent = 'No hay jugadores conectados';
-        listEl.appendChild(emptyLi);
-        return;
-      }
+    function unlocked(skin) {
+      if (skin.starter || !skin.unlock) return true;
+      return !!progress && Number(progress[skin.unlock.stat] || 0) >= skin.unlock.count;
+    }
 
-      for (const p of players) {
-        const li      = document.createElement('li');
-        li.className  = 'player-item';
+    // ── Salas ───────────────────────────────────────────────────────────────
+    function myActiveRoom() {
+      return rooms.find(r => r.status !== 'finalizada' && r.players.some(p => p.id === myId && !p.bankrupt));
+    }
 
-        const infoDiv = document.createElement('div');
-        infoDiv.className = 'player-info';
+    function renderRooms() {
+      const box = $('rooms');
+      if (!rooms.length) return;
+      const mine = myActiveRoom();
 
-        const dot = document.createElement('span');
-        dot.className = 'status-dot';
+      box.replaceChildren(...rooms.map(r => {
+        const style = ROOM_STYLE[r.emblem] || { emoji: '🎲', color: 'var(--gold)' };
+        const amIn = r.players.some(p => p.id === myId);
 
-        const providerBadge = document.createElement('span');
-        providerBadge.style.marginRight = '0.35rem';
-        providerBadge.textContent = p.provider === 'google' ? '🌐' : '👤';
-        providerBadge.title = p.provider === 'google' ? 'Cuenta Google' : 'Cuenta Local';
-
-        const nameSpan = document.createElement('strong');
-        nameSpan.textContent = p.username;
-
-        infoDiv.appendChild(dot);
-        infoDiv.appendChild(providerBadge);
-        infoDiv.appendChild(nameSpan);
-
-        if (p.username && currentUsername &&
-            p.username.toLowerCase() === currentUsername.toLowerCase()) {
-          li.classList.add('is-me');
-          const youBadge = document.createElement('span');
-          youBadge.className = 'badge';
-          youBadge.textContent = 'Tú';
-          infoDiv.appendChild(youBadge);
+        const seats = el('div', { class: 'seats', 'aria-label': `${r.players.length} de ${r.maxPlayers} asientos ocupados` });
+        for (let i = 0; i < r.maxPlayers; i++) {
+          const p = r.players[i];
+          if (p) {
+            const t = Tokens.node(p.skin, '', p.color);
+            if (!p.connected) t.classList.add('offline');
+            t.title = `${p.username} — ${p.skin.name}${p.connected ? '' : ' (desconectado)'}`;
+            seats.append(t);
+          } else {
+            seats.append(el('span', { class: `seat ${i < r.minPlayers ? 'min' : ''}`, title: i < r.minPlayers ? 'Asiento necesario para iniciar' : 'Asiento libre' }, i + 1));
+          }
         }
 
-        const idSpan = document.createElement('span');
-        idSpan.style.color    = 'var(--text-muted)';
-        idSpan.style.fontSize = '0.82rem';
-        idSpan.textContent    = p.userId !== undefined ? `ID: ${p.userId}` : '';
+        const list = el('ul', { class: 'room-players' });
+        if (!r.players.length) list.append(el('li', { class: 'empty' }, 'Nadie en esta sala todavía.'));
+        for (const p of r.players) {
+          list.append(el('li', { class: p.connected ? '' : 'offline' },
+            Tokens.node(p.skin, 'sm', p.color),
+            el('span', { class: 'pn' }, p.username, p.id === myId ? ' (tú)' : '', p.id === r.hostId ? ' 👑' : '', p.bankrupt ? ' · eliminado' : ''),
+            p.connected && p.coordinatorId ? coordTag(p.coordinatorId) : el('span', { class: 'small text-muted' }, p.connected ? 'en la sala' : 'desconectado')
+          ));
+        }
 
-        li.appendChild(infoDiv);
-        li.appendChild(idSpan);
-        listEl.appendChild(li);
-      }
+        const meta = el('div', { class: 'room-meta' },
+          el('strong', {}, `${r.players.length}/${r.maxPlayers}`), ' jugadores · mínimo ', el('strong', {}, r.minPlayers), ' para iniciar',
+          r.spectators.length ? ` · ${r.spectators.length} observando` : ''
+        );
+
+        let btn;
+        const go = () => enterRoom(r.id);
+        if (amIn && r.status !== 'finalizada') btn = el('button', { class: 'btn', onclick: go }, 'Volver a mi partida');
+        else if (r.status === 'en_curso') btn = el('button', { class: 'btn btn-ghost', onclick: go }, 'Observar partida');
+        else if (r.status === 'finalizada') btn = el('button', { class: 'btn btn-ghost', onclick: go }, amIn ? 'Ver resultados' : 'Ver sala');
+        else if (r.players.length >= r.maxPlayers) btn = el('button', { class: 'btn', disabled: true }, 'Sala llena');
+        else if (mine && mine.id !== r.id) btn = el('button', { class: 'btn', disabled: true, title: `Ya estás en ${mine.name}` }, `Ya estás en ${mine.name}`);
+        else btn = el('button', { class: 'btn', onclick: go }, r.status === 'vacia' ? 'Abrir la sala' : 'Unirme a la sala');
+
+        return el('article', { class: 'room-card', '--rc': style.color, 'data-status': r.status },
+          el('header', { class: 'room-head' },
+            el('span', { class: 'room-emblem', 'aria-hidden': 'true' }, style.emoji),
+            el('div', { class: 'room-title' }, el('h3', {}, r.name), el('span', { class: 'room-id' }, r.id)),
+            el('span', { class: `status-pill ${r.status}` }, STATUS_LABEL[r.status] || r.status)
+          ),
+          seats, meta, list, btn
+        );
+      }));
     }
 
-    // ── RENDERIZADO DEL CANVAS ────────────────────────────────────────────────
-    const canvas = document.getElementById('game-canvas');
+    function enterRoom(roomId) {
+      leaving = true;
+      if (conn) conn.close(1000, 'entering room');
+      window.location.href = `game.html?sala=${encodeURIComponent(roomId)}`;
+    }
+
+    // ── Jugadores en línea ──────────────────────────────────────────────────
+    let lastListRender = 0;
+    function renderPlayersList() {
+      lastListRender = Date.now();
+      const listEl = $('players-list');
+      $('players-count').textContent = `${players.length} ${players.length === 1 ? 'conectado' : 'conectados'}`;
+      if (!players.length) {
+        listEl.replaceChildren(el('li', { class: 'player-item' }, el('span', { class: 'text-muted' }, 'No hay jugadores conectados')));
+        return;
+      }
+      const roomName = (id) => (rooms.find(r => r.id === id) || {}).name || id;
+      const artOf = {};
+      for (const p of window.lastState.players || []) if (p.extras && p.extras.art) artOf[p.userId] = p.extras;
+
+      const sorted = [...players].sort((a, b) => (b.userId === myId) - (a.userId === myId) || a.username.localeCompare(b.username));
+      listEl.replaceChildren(...sorted.map(p => {
+        const isMe = p.userId === myId;
+        const ex = artOf[p.userId];
+        return el('li', { class: `player-item ${isMe ? 'is-me' : ''}` },
+          el('div', { class: 'player-info' },
+            ex ? Tokens.node({ art: ex.art }, 'sm', ex.color) : el('span', { class: 'status-dot' }),
+            el('strong', {}, p.username),
+            isMe ? el('span', { class: 'badge' }, 'Tú') : '',
+            el('span', { title: p.provider === 'google' ? 'Cuenta Google' : 'Cuenta local' }, p.provider === 'google' ? '🌐' : '')
+          ),
+          el('div', { class: 'right' },
+            coordTag(p.coordinatorId),
+            el('span', { class: 'where' }, p.view === 'board' ? `en ${roomName(p.roomId)}` : 'en la plaza')
+          )
+        );
+      }));
+    }
+
+    // ── Colección y misiones ────────────────────────────────────────────────
+    function renderCollection() {
+      if (!gameConfig) return;
+      const s = progress || {};
+      const statDefs = [
+        ['gamesPlayed', 'Partidas jugadas'],
+        ['gamesWon', 'Partidas ganadas'],
+        ['propertiesBought', 'Propiedades compradas'],
+        ['buildingsBuilt', 'Casas y hoteles']
+      ];
+      $('stats').replaceChildren(...statDefs.map(([k, label]) =>
+        el('div', { class: 'stat' }, el('div', { class: 'v' }, progress ? s[k] || 0 : '–'), el('div', { class: 'l' }, label))));
+
+      $('collection').replaceChildren(
+        ...(progressError ? [el('p', { class: 'alert alert-warning show' }, 'No se pudo leer tu progreso del auth-service; se muestran solo las fichas iniciales.')] : []),
+        ...gameConfig.themes.map(t => {
+          const member = gameConfig.members.find(m => m.id === t.memberId);
+          const color = WORLD_COLOR[t.memberId] || 'var(--gold)';
+          return el('div', { class: 'theme-col', '--wc': color },
+            el('h3', {}, t.name),
+            el('div', { class: 'tdesc' }, `${member ? member.world + ' · de ' + member.name : ''}. ${t.description}`),
+            ...t.skins.map(sk => {
+              const ok = unlocked(sk);
+              const node = Tokens.node(sk, 'lg', ok ? color : '#4a4356');
+              if (!ok) node.classList.add('locked');
+              const have = sk.unlock ? Math.min(Number(s[sk.unlock.stat] || 0), sk.unlock.count) : 0;
+              const rarity = gameConfig.rarities ? gameConfig.rarities[sk.rarity] : null;
+              return el('div', { class: `skin-row ${ok ? '' : 'locked'}` },
+                node,
+                el('div', { class: 'sk' },
+                  el('div', { class: 'sk-name' }, sk.name, ok ? '' : ' 🔒'),
+                  el('div', { class: `rarity ${sk.rarity}` }, rarity ? rarity.label : sk.rarity),
+                  el('div', { class: 'sk-sub' }, sk.starter ? 'Ficha inicial · disponible' : ok ? `Desbloqueada · ${sk.unlock.text}` : `Misión: ${sk.unlock.text} (${have}/${sk.unlock.count})`),
+                  !sk.starter && !ok ? el('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': sk.unlock.count, 'aria-valuenow': have },
+                    el('span', { style: `width:${(have / sk.unlock.count) * 100}%` })) : ''
+                )
+              );
+            })
+          );
+        })
+      );
+      renderArtPicker();
+    }
+
+    function renderArtPicker() {
+      const sel = $('player-art-picker');
+      const saved = localStorage.getItem('plazaArt');
+      const skins = allSkins().filter(unlocked);
+      const current = sel.value || saved || (skins[0] && skins[0].art);
+      sel.replaceChildren(...gameConfig.themes.map(t => {
+        const og = el('optgroup', { label: t.name });
+        for (const sk of t.skins.filter(unlocked)) og.append(el('option', { value: sk.art }, sk.name));
+        return og;
+      }));
+      if (skins.some(s => s.art === current)) sel.value = current;
+      $('me-token').replaceChildren(Tokens.node({ art: sel.value }, '', $('player-color-picker').value));
+    }
+
+    async function loadProgress() {
+      try {
+        progress = await Net.fetchProgress(originalToken);
+        progressError = false;
+      } catch {
+        progressError = true;
+      }
+      renderCollection();
+      sendExtras();
+    }
+
+    // ── Canvas ──────────────────────────────────────────────────────────────
+    const canvas = $('game-canvas');
     const ctx = canvas.getContext('2d');
+    let bg = null;
 
-    function renderCanvas(players) {
-      if (!ctx) return;
+    function seeded(seed) {
+      return () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+    }
 
-      // Limpiar fondo
-      ctx.fillStyle = '#0f172a';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Dibujar cuadrícula sutil
-      ctx.strokeStyle = '#1e293b';
-      ctx.lineWidth = 1;
-      const gridSize = 40;
-      for (let x = 0; x < canvas.width; x += gridSize) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, canvas.height);
-        ctx.stroke();
+    // Fondo: cada cuadrante es un mundo (se dibuja una sola vez)
+    function buildBackground(w, h) {
+      const off = document.createElement('canvas');
+      off.width = w; off.height = h;
+      const g = off.getContext('2d');
+      const rnd = seeded(42);
+      const hw = w / 2, hh = h / 2;
+      const quads = [
+        { x: 0,  y: 0,  base: '#0d2633', accent: '#2a6f8f', label: 'Mar de los Corsarios', color: '#e05a47' },
+        { x: hw, y: 0,  base: '#0f2a1f', accent: '#2f8f63', label: 'Reinos Encantados',    color: '#46b98a' },
+        { x: 0,  y: hh, base: '#101d30', accent: '#6fa8dc', label: 'Tierras del Norte',    color: '#5b9bd5' },
+        { x: hw, y: hh, base: '#261a10', accent: '#8a5e33', label: 'Barrio de las Letras', color: '#c58b4f' }
+      ];
+      quads.forEach((q, i) => {
+        const grad = g.createRadialGradient(q.x + hw / 2, q.y + hh / 2, 10, q.x + hw / 2, q.y + hh / 2, hw * 0.8);
+        grad.addColorStop(0, q.accent + '55');
+        grad.addColorStop(1, q.base);
+        g.fillStyle = grad;
+        g.fillRect(q.x, q.y, hw, hh);
+        g.save();
+        g.beginPath(); g.rect(q.x, q.y, hw, hh); g.clip();
+        g.strokeStyle = q.accent + '66';
+        g.fillStyle = q.accent + '55';
+        g.lineWidth = 1.5;
+        if (i === 0) {        // olas
+          for (let y = q.y + 20; y < q.y + hh; y += 26) {
+            g.beginPath();
+            for (let x = q.x; x <= q.x + hw; x += 8) g.lineTo(x, y + Math.sin((x + y) / 18) * 4);
+            g.stroke();
+          }
+        } else if (i === 1) { // bosque
+          for (let k = 0; k < 26; k++) {
+            const x = q.x + rnd() * hw, y = q.y + 20 + rnd() * (hh - 20), s = 8 + rnd() * 10;
+            g.beginPath(); g.moveTo(x, y - s * 1.6); g.lineTo(x - s, y); g.lineTo(x + s, y); g.closePath(); g.fill();
+          }
+          g.fillStyle = '#f2d48a55';
+          for (let k = 0; k < 30; k++) { g.beginPath(); g.arc(q.x + rnd() * hw, q.y + rnd() * hh, 1.3, 0, Math.PI * 2); g.fill(); }
+        } else if (i === 2) { // montañas del fiordo
+          g.fillStyle = q.accent + '33';
+          for (let k = 0; k < 6; k++) {
+            const x = q.x + k * (hw / 5) - 20, s = 50 + rnd() * 40;
+            g.beginPath(); g.moveTo(x, q.y + hh); g.lineTo(x + s, q.y + hh - s * 1.4); g.lineTo(x + s * 2, q.y + hh); g.fill();
+            g.strokeStyle = '#e6f2ff55';
+            g.beginPath(); g.moveTo(x + s - 10, q.y + hh - s * 1.4 + 14); g.lineTo(x + s, q.y + hh - s * 1.4); g.lineTo(x + s + 10, q.y + hh - s * 1.4 + 14); g.stroke();
+          }
+        } else {              // estanterías de libros
+          for (let y = q.y + 30; y < q.y + hh; y += 46) {
+            g.fillStyle = q.accent + '55'; g.fillRect(q.x, y + 34, hw, 3);
+            let x = q.x + 6;
+            while (x < q.x + hw - 6) {
+              const bw = 6 + rnd() * 8, bh = 22 + rnd() * 12;
+              g.fillStyle = ['#8a3a4a', '#5a6f3a', '#3a4f7a', '#7a5a2a', '#6a4a7a'][Math.floor(rnd() * 5)] + '88';
+              g.fillRect(x, y + 34 - bh, bw, bh);
+              x += bw + 2;
+            }
+          }
+        }
+        g.restore();
+        g.font = '700 15px Cinzel, Georgia, serif';
+        g.fillStyle = q.color + 'cc';
+        g.textAlign = i % 2 === 0 ? 'left' : 'right';
+        g.fillText(q.label.toUpperCase(), i % 2 === 0 ? q.x + 14 : q.x + hw - 14, i < 2 ? q.y + 24 : q.y + hh - 14);
+      });
+      // Rosa de los vientos en el centro
+      g.save();
+      g.translate(hw, hh);
+      g.strokeStyle = '#d9b45a88'; g.fillStyle = '#d9b45a44'; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(0, 0, 34, 0, Math.PI * 2); g.stroke();
+      for (let k = 0; k < 4; k++) {
+        g.rotate(Math.PI / 2);
+        g.beginPath(); g.moveTo(0, -46); g.lineTo(7, 0); g.lineTo(-7, 0); g.closePath(); g.fill(); g.stroke();
       }
-      for (let y = 0; y < canvas.height; y += gridSize) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(canvas.width, y);
-        ctx.stroke();
-      }
+      g.restore();
+      g.strokeStyle = '#d9b45a33'; g.setLineDash([6, 6]);
+      g.beginPath(); g.moveTo(hw, 0); g.lineTo(hw, h); g.moveTo(0, hh); g.lineTo(w, hh); g.stroke();
+      return off;
+    }
 
-      // Dibujar cada jugador enviado por el servidor autoritativo
-      for (const p of players) {
-        const isMe = p.username && currentUsername && p.username.toLowerCase() === currentUsername.toLowerCase();
-        const radius = worldConfig.playerRadius || 15;
-        const color = (p.extras && p.extras.color) ? p.extras.color : (isMe ? '#10b981' : '#3b82f6');
-        const mood = (p.extras && p.extras.mood) ? p.extras.mood : '';
+    function renderCanvas(list) {
+      if (!bg || bg.width !== canvas.width || bg.height !== canvas.height) bg = buildBackground(canvas.width, canvas.height);
+      ctx.drawImage(bg, 0, 0);
+      const r = worldConfig.playerRadius || 18;
 
-        // Sombra de brillo
+      for (const p of list) {
+        const isMe = p.userId === myId;
+        const ex = p.extras || {};
+        const ring = ex.color || (isMe ? '#d9b45a' : '#a99f8d');
+
         ctx.save();
-        ctx.shadowColor = color;
-        ctx.shadowBlur = isMe ? 12 : 6;
-
-        // Círculo del jugador
+        ctx.shadowColor = ring;
+        ctx.shadowBlur = isMe ? 16 : 6;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-        ctx.fillStyle = color;
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = '#1a1622';
         ctx.fill();
-
-        // Borde exterior
-        ctx.lineWidth = isMe ? 3 : 1.5;
-        ctx.strokeStyle = isMe ? '#ffffff' : 'rgba(255,255,255,0.7)';
+        ctx.lineWidth = isMe ? 4 : 3;
+        ctx.strokeStyle = ring;
         ctx.stroke();
         ctx.restore();
 
-        // Mood emoji encima de la cabeza
-        if (mood) {
-          ctx.font = '14px system-ui';
-          ctx.textAlign = 'center';
-          ctx.fillText(mood, p.x, p.y - radius - 16);
-        }
+        const img = ex.art && Tokens.image(ex.art);
+        if (img) ctx.drawImage(img, p.x - r * 0.8, p.y - r * 0.8, r * 1.6, r * 1.6);
 
-        // Nombre de usuario y badge de provider
-        ctx.font = isMe ? 'bold 12px system-ui' : '11px system-ui';
-        ctx.fillStyle = isMe ? '#6ee7b7' : '#f8fafc';
         ctx.textAlign = 'center';
-        const providerIcon = p.provider === 'google' ? '🌐' : '👤';
-        ctx.fillText(`${providerIcon} ${p.username}`, p.x, p.y - radius - 4);
+        if (ex.mood) { ctx.font = '16px system-ui'; ctx.fillText(ex.mood, p.x, p.y - r - 20); }
+        ctx.font = `${isMe ? '700' : '500'} 13px "Alegreya Sans", system-ui`;
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(10,8,14,0.85)';
+        ctx.strokeText(p.username, p.x, p.y - r - 6);
+        ctx.fillStyle = isMe ? '#f2d48a' : '#f3ead7';
+        ctx.fillText(p.username, p.x, p.y - r - 6);
+        if (p.coordinatorId) {
+          ctx.font = '700 10px Cinzel, Georgia, serif';
+          ctx.strokeText(p.coordinatorId, p.x, p.y + r + 13);
+          ctx.fillStyle = coordColor(p.coordinatorId);
+          ctx.fillText(p.coordinatorId, p.x, p.y + r + 13);
+        }
       }
     }
 
-    // ── Inicio ────────────────────────────────────────────────────────────────
-    document.getElementById('current-username').textContent = currentUsername;
+    // ── Entrada: intents y extras ───────────────────────────────────────────
+    const activeKeys = { x: 0, y: 0 };
+    let lastSentIntent = { x: 0, y: 0 };
+
+    function sendIntent(force = false) {
+      const dir = { x: activeKeys.x, y: activeKeys.y };
+      if (!force && dir.x === lastSentIntent.x && dir.y === lastSentIntent.y) return;
+      if (conn && conn.send({ type: 'intent', intent: { dir } })) lastSentIntent = dir;
+    }
+
+    function sendExtras() {
+      if (!conn) return;
+      const color = $('player-color-picker').value;
+      const mood  = $('player-mood-picker').value;
+      const art   = $('player-art-picker').value || 'sombrero_pirata';
+      try { localStorage.setItem('plazaArt', art); } catch { /* sin almacenamiento */ }
+      $('me-token').replaceChildren(Tokens.node({ art }, '', color));
+      conn.send({ type: 'extras_update', extras: { color, mood, art } });
+    }
+
+    const KEYS = { arrowleft: ['x', -1], a: ['x', -1], arrowright: ['x', 1], d: ['x', 1], arrowup: ['y', -1], w: ['y', -1], arrowdown: ['y', 1], s: ['y', 1] };
+    function typingIn(e) { return /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName); }
+
+    window.addEventListener('keydown', (e) => {
+      const k = KEYS[e.key.toLowerCase()];
+      if (!k || typingIn(e)) return;
+      e.preventDefault();
+      activeKeys[k[0]] = k[1];
+      sendIntent();
+    });
+    window.addEventListener('keyup', (e) => {
+      const k = KEYS[e.key.toLowerCase()];
+      if (!k) return;
+      if (activeKeys[k[0]] === k[1]) activeKeys[k[0]] = 0;
+      sendIntent();
+    });
+    window.addEventListener('blur', () => { activeKeys.x = 0; activeKeys.y = 0; sendIntent(); });
+
+    $('player-color-picker').addEventListener('input', sendExtras);
+    $('player-mood-picker').addEventListener('change', sendExtras);
+    $('player-art-picker').addEventListener('change', sendExtras);
+
+    // ── Mensajes del coordinador ────────────────────────────────────────────
+    function showCoordinator(info) {
+      const id = (mesh && mesh.coordinatorId) || (info && info.coordinatorId) || '—';
+      $('coord-id').textContent = id;
+      $('tick-coord').textContent = id;
+      $('tick-info').firstChild.textContent = `Tick: ${worldConfig.tickRate || 20} Hz · Coordinador: `;
+      $('mesh-peers').textContent = mesh ? (mesh.peers.length ? mesh.peers.join(', ') : 'sin pares') : '—';
+    }
+
+    function onMessage(msg) {
+      switch (msg.type) {
+        case 'welcome':
+          myId = String(msg.you.userId);
+          if (msg.world) {
+            worldConfig = msg.world;
+            canvas.width = msg.world.width;
+            canvas.height = msg.world.height;
+          }
+          mesh = msg.coordinator || null;
+          showCoordinator();
+          return;
+        case 'game_config':
+          gameConfig = msg.data;
+          renderCollection();
+          return;
+        case 'state':
+          window.lastState = msg;
+          renderCanvas(msg.players);
+          // La lista muestra la ficha de cada jugador (viene en el state): 1 vez/s basta
+          if (Date.now() - lastListRender > 1000) renderPlayersList();
+          return;
+        case 'players_update':
+          players = msg.players;
+          renderPlayersList();
+          return;
+        case 'rooms_update':
+          rooms = msg.data.rooms;
+          renderRooms();
+          renderPlayersList();
+          return;
+        case 'mesh_update':
+          mesh = msg.data;
+          showCoordinator();
+          return;
+        case 'progress_changed':
+          loadProgress();
+          return;
+        case 'auth_challenge':
+          conn.send({ type: 'auth_response', data: { token: localStorage.getItem('token') } });
+          return;
+      }
+    }
+
+    // ── Inicio ──────────────────────────────────────────────────────────────
+    $('current-username').textContent = currentUsername;
+    for (const art of Tokens.arts) Tokens.image(art); // precarga para el canvas
 
     if (!originalToken) {
-      goToLogin('Debes iniciar sesión para acceder al lobby.');
+      Net.goToLogin('Debes iniciar sesión para acceder al lobby.');
     } else {
-      startLobby();
+      start();
     }
 
-    function startLobby() {
-      let intentionalClose   = false;
-      let receivedPlayersList = false;
-
-      setConnState('connecting', 'Conectando...');
-      const ws = new WebSocket(`${COORDINATOR_WS}/connect?token=${encodeURIComponent(originalToken)}`);
-
-      // ── ENTRADA DE TECLADO: INTENTOS DE MOVIMIENTO ────────────────────────
-      const activeKeys = { x: 0, y: 0 };
-      let lastSentIntent = { x: 0, y: 0 };
-
-      function updateAndSendIntent() {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        const dir = { x: activeKeys.x, y: activeKeys.y };
-
-        // Solo enviar si la intención cambió para ahorrar ancho de banda
-        if (dir.x !== lastSentIntent.x || dir.y !== lastSentIntent.y) {
-          lastSentIntent = dir;
-          ws.send(JSON.stringify({
-            type: 'intent',
-            intent: { dir }
-          }));
-        }
-      }
-
-      window.addEventListener('keydown', (e) => {
-        // Evitar scroll de la página con flechas
-        const k = e.key.toLowerCase();
-        let handled = false;
-
-        if (k === 'arrowleft' || k === 'a')  { activeKeys.x = -1; handled = true; }
-        if (k === 'arrowright' || k === 'd') { activeKeys.x = 1;  handled = true; }
-        if (k === 'arrowup' || k === 'w')    { activeKeys.y = -1; handled = true; }
-        if (k === 'arrowdown' || k === 's')  { activeKeys.y = 1;  handled = true; }
-
-        if (handled) {
-          e.preventDefault();
-          updateAndSendIntent();
+    function start() {
+      conn = Net.connectCoordinator({
+        token: originalToken,
+        params: { view: 'canvas' },
+        onStatus(state, text, info) {
+          setConnState(state, state === 'connected' && info ? `Conectado a ${info.coordinatorId}` : text);
+        },
+        onOpen(info) {
+          $('lost-banner').hidden = true;
+          showCoordinator(info);
+          lastSentIntent = { x: 0, y: 0 };
+          setTimeout(() => { sendExtras(); sendIntent(true); }, 100);
+        },
+        onLost(info) {
+          if (leaving) return;
+          mesh = null;
+          showCoordinator();
+          const b = $('lost-banner');
+          b.hidden = false;
+          b.textContent = `Se perdió la conexión con ${info.coordinatorId}. Pidiendo un nuevo coordinador al auth-service (GET /coordinator)…`;
+        },
+        onMessage,
+        onFatal(code) {
+          if (leaving) return;
+          Net.goToLogin(Net.FATAL_MESSAGES[code] || 'La sesión terminó.', code === 4002);
         }
       });
+      loadProgress();
 
-      window.addEventListener('keyup', (e) => {
-        const k = e.key.toLowerCase();
-        let handled = false;
-
-        if ((k === 'arrowleft' || k === 'a')  && activeKeys.x === -1) { activeKeys.x = 0; handled = true; }
-        if ((k === 'arrowright' || k === 'd') && activeKeys.x === 1)  { activeKeys.x = 0; handled = true; }
-        if ((k === 'arrowup' || k === 'w')    && activeKeys.y === -1) { activeKeys.y = 0; handled = true; }
-        if ((k === 'arrowdown' || k === 's')  && activeKeys.y === 1)  { activeKeys.y = 0; handled = true; }
-
-        if (handled) {
-          updateAndSendIntent();
-        }
-      });
-
-      // ── FEATURE EXTRA: ENVÍO DE EXTRAS ────────────────────────────────────
-      function sendExtras() {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        const color = document.getElementById('player-color-picker').value;
-        const mood  = document.getElementById('player-mood-picker').value;
-        ws.send(JSON.stringify({
-          type: 'extras_update',
-          extras: { color, mood }
-        }));
-      }
-
-      document.getElementById('player-color-picker').addEventListener('input', sendExtras);
-      document.getElementById('player-mood-picker').addEventListener('change', sendExtras);
-
-      // ── CAPA 1: Polling de localStorage (detección client-side) ───────────
-      const tokenPollInterval = setInterval(() => {
-        const currentToken = localStorage.getItem('token');
-        if (currentToken !== originalToken) {
-          clearInterval(tokenPollInterval);
-          console.warn('[SECURITY] Token modificado en localStorage. Cerrando sesión.');
-          intentionalClose = true;
-          if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-            ws.close(1000, 'token tampered client-side');
-          }
-          goToLogin('Sesión cerrada: se detectó una modificación no autorizada del token de sesión.');
+      // Detección local de manipulación del token (pestaña o DevTools)
+      const tokenPoll = setInterval(() => {
+        if (localStorage.getItem('token') !== originalToken) {
+          clearInterval(tokenPoll);
+          leaving = true;
+          conn.close(1000, 'token tampered client-side');
+          Net.goToLogin('Sesión cerrada: se detectó una modificación no autorizada del token de sesión.');
         }
       }, 2000);
 
-      window.addEventListener('storage', (e) => {
-        if (e.key === 'token' && e.newValue !== originalToken) {
-          clearInterval(tokenPollInterval);
-          intentionalClose = true;
-          if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-            ws.close(1000, 'token tampered from another tab');
-          }
-          goToLogin('Sesión cerrada: se detectó una modificación no autorizada del token de sesión.');
-        }
-      });
-
-      ws.onopen = () => {
-        console.log('[WS] Conectado al coordinador.');
-        setConnState('connected', 'Conectado');
-        // Enviar extras iniciales al conectar
-        setTimeout(sendExtras, 100);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-
-          // 1. Bienvenida con configuración de dimensiones del mundo
-          if (msg.type === 'welcome' && msg.world) {
-            worldConfig = msg.world;
-            canvas.width  = msg.world.width;
-            canvas.height = msg.world.height;
-            return;
-          }
-
-          // 2. Estado autoritativo del juego transmitido a 20 Hz
-          if (msg.type === 'state' && Array.isArray(msg.players)) {
-            // Guardamos en la variable global para inspección / trampa en DevTools
-            window.lastState = msg;
-            renderCanvas(msg.players);
-            renderPlayersList(msg.players);
-            return;
-          }
-
-          // 3. Actualización de lista simple de jugadores
-          if (msg.type === 'players_update' && Array.isArray(msg.players)) {
-            renderPlayersList(msg.players);
-            return;
-          }
-
-          // 4. Verificación de token (auth_challenge)
-          if (msg.type === 'auth_challenge') {
-            const currentToken = localStorage.getItem('token');
-            ws.send(JSON.stringify({
-              type: 'auth_response',
-              data: { token: currentToken }
-            }));
-          }
-
-        } catch (err) {
-          console.error('[WS] Error procesando mensaje:', err);
-        }
-      };
-
-      ws.onerror = (err) => {
-        console.error('[WS] Error de conexión:', err);
-      };
-
-      ws.onclose = (event) => {
-        clearInterval(tokenPollInterval);
-        setConnState('disconnected', 'Desconectado');
-
-        if (intentionalClose) {
-          goToLogin('Has cerrado sesión correctamente.');
-          return;
-        }
-
-        let reasonMsg   = 'La conexión con el coordinador se cerró inesperadamente.';
-        let keepSession = false;
-
-        if (event.code === 4001 || event.reason === 'invalid token') {
-          reasonMsg = 'Sesión terminada: Token inválido o expirado. Por favor vuelve a iniciar sesión.';
-        } else if (event.code === 4002) {
-          reasonMsg   = 'Tu sesión fue desconectada porque abriste el juego en otra pestaña.';
-          keepSession = true;
-        } else if (event.code === 4003) {
-          reasonMsg = 'Sesión cerrada: se detectó una modificación no autorizada del token de sesión.';
-        }
-
-        goToLogin(reasonMsg, keepSession);
-      };
-
-      // Botón Cerrar sesión
-      document.getElementById('logout-btn').addEventListener('click', () => {
-        clearInterval(tokenPollInterval);
-        intentionalClose = true;
+      $('logout-btn').addEventListener('click', () => {
+        clearInterval(tokenPoll);
+        leaving = true;
+        $('logout-btn').disabled = true;
         setConnState('disconnected', 'Desconectando...');
-        document.getElementById('logout-btn').disabled = true;
-
-        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-          ws.close(1000, 'user logout');
-          setTimeout(() => goToLogin('Has cerrado sesión correctamente.'), 1500);
-        } else {
-          goToLogin('Has cerrado sesión correctamente.');
-        }
+        conn.close(1000, 'user logout');
+        setTimeout(() => Net.goToLogin('Has cerrado sesión correctamente.'), 300);
       });
     }
   </script>
