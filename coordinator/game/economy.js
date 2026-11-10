@@ -1,16 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Economía del juego (balance general).
 //
-// Todos los valores están en una moneda genérica: el nombre y el símbolo se
-// definen aquí (CURRENCY) cuando el equipo los decida. Ningún otro archivo
+// Todos los valores están en Doblones (Đ), la moneda común de los cuatro mundos. Ningún otro archivo
 // debe tener montos "quemados": todo sale de este módulo.
 //
 // El razonamiento detrás de cada número está en docs/ECONOMIA.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CURRENCY = {
-  name:   '[Moneda por definir]',
-  symbol: '¤'
+  name:   'Doblones',
+  symbol: 'Đ'
 };
 
 // ── Flujo de dinero básico ────────────────────────────────────────────────────
