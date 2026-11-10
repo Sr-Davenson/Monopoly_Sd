@@ -1,9 +1,500 @@
-CONTRIBUTING.md
-Makefile
-docs/
-examples/
-reports/
-test/
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Monopoly SD — Lobby y Juego en Vivo</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="config.js"></script>
+  <style>
+    /* Indicador de estado de la conexión WebSocket */
+    .conn-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.3rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.82rem;
+      border: 1px solid var(--border);
+      background-color: var(--bg);
+      color: var(--text-muted);
+    }
+    .conn-status .status-dot { transition: background-color 0.3s, box-shadow 0.3s; }
 
-.jshintrc
-.travis.yml
+    .conn-status[data-state="connecting"] { color: #fcd34d; border-color: rgba(245, 158, 11, 0.4); }
+    .conn-status[data-state="connecting"] .status-dot {
+      background-color: var(--warning);
+      box-shadow: 0 0 8px var(--warning);
+      animation: pulse 1s ease-in-out infinite;
+    }
+
+    .conn-status[data-state="connected"] { color: #6ee7b7; border-color: rgba(16, 185, 129, 0.4); }
+    .conn-status[data-state="connected"] .status-dot {
+      background-color: var(--success);
+      box-shadow: 0 0 8px var(--success);
+    }
+
+    .conn-status[data-state="disconnected"] { color: #fca5a5; border-color: rgba(239, 68, 68, 0.4); }
+    .conn-status[data-state="disconnected"] .status-dot {
+      background-color: var(--danger);
+      box-shadow: none;
+    }
+
+    .player-item.is-me { border-color: rgba(16, 185, 129, 0.5); }
+
+    @keyframes pulse { 50% { opacity: 0.35; } }
+    @media (prefers-reduced-motion: reduce) {
+      .conn-status[data-state="connecting"] .status-dot { animation: none; }
+    }
+
+    /* Estilos del Canvas */
+    .canvas-container {
+      display: flex;
+      justify-content: center;
+      background: #0b1120;
+      border-radius: 8px;
+      padding: 0.5rem;
+      border: 1px solid var(--border);
+      position: relative;
+    }
+
+    canvas#game-canvas {
+      background-color: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      display: block;
+      max-width: 100%;
+      height: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="container" style="max-width: 1000px;">
+    <header class="header">
+      <h1>Monopoly SD — Juego en Vivo</h1>
+      <p>Servidor autoritativo a 20 Hz con sincronización WebSocket en tiempo real</p>
+    </header>
+
+    <div class="card">
+      <div class="top-bar">
+        <div class="user-badge">
+          <span>Jugador actual: <strong id="current-username">...</strong></span>
+          <span id="conn-status" class="conn-status" data-state="connecting" role="status" aria-live="polite">
+            <span class="status-dot"></span>
+            <span id="conn-status-text">Conectando...</span>
+          </span>
+        </div>
+        <div style="display:flex;gap:0.6rem;flex-wrap:wrap">
+          <button id="logout-btn" type="button" class="btn btn-danger">Cerrar sesión</button>
+        </div>
+      </div>
+
+      <!-- ── SECCIÓN CANVAS (TALLER 5) ────────────────────────────────────── -->
+      <section style="margin-top: 1rem; margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.85rem; flex-wrap: wrap; gap: 0.75rem;">
+          <h2 style="margin: 0; font-size: 1.2rem;">Tablero en Vivo (Canvas 20 Hz)</h2>
+
+          <!-- Feature Extra: Selector de Color y Mood -->
+          <div style="display: flex; align-items: center; gap: 0.75rem; background: var(--bg); padding: 0.4rem 0.8rem; border-radius: 8px; border: 1px solid var(--border);">
+            <label for="player-color-picker" style="font-size: 0.85rem; color: var(--text-muted); font-weight: 500;">Color:</label>
+            <input type="color" id="player-color-picker" value="#3b82f6" title="Cambiar color de tu personaje" style="cursor: pointer; border: none; width: 32px; height: 32px; border-radius: 6px; background: none;" />
+
+            <label for="player-mood-picker" style="font-size: 0.85rem; color: var(--text-muted); font-weight: 500; margin-left: 0.5rem;">Mood:</label>
+            <select id="player-mood-picker" title="Selecciona tu emoji de estado" style="padding: 0.25rem 0.5rem; border-radius: 6px; background: var(--surface); color: var(--text); border: 1px solid var(--border); font-size: 0.9rem;">
+              <option value="🚀">🚀 Cohete</option>
+              <option value="👑">👑 Corona</option>
+              <option value="🎩">🎩 Monopoly</option>
+              <option value="🔥">🔥 Fuego</option>
+              <option value="⚡">⚡ Rayo</option>
+              <option value="⭐">⭐ Estrella</option>
+            </select>
+          </div>
+        </div>
+
+        <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem;">
+          💡 Controles: Usa las teclas <strong>W, A, S, D</strong> o las <strong>Flechas del teclado</strong> para moverte. El servidor calcula tu posición con <code>dt</code> a 20 Hz.
+        </p>
+
+        <div class="canvas-container">
+          <canvas id="game-canvas" width="800" height="600"></canvas>
+        </div>
+      </section>
+
+      <h2>
+        <span>Jugadores en línea</span>
+        <span class="badge" id="players-count">0 conectados</span>
+      </h2>
+
+      <ul id="players-list" class="players-list">
+        <li class="player-item">
+          <span class="text-muted">Conectando con el coordinador...</span>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    // ── VARIABLE GLOBAL EXPUESTA PARA DEMO DE AUTORIDAD (DEMO 3) ──────────────
+    // Al modificar lastState en DevTools, demostramos que la trampa local no altera el servidor
+    window.lastState = { t: Date.now(), players: [] };
+
+    // ── Token original leído al cargar la página ──────────────────────────────
+    const originalToken    = localStorage.getItem('token');
+    const currentUsername  = localStorage.getItem('username') || 'Jugador';
+
+    const defaultConfig = window.APP_CONFIG || {
+      AUTH_URL: 'http://localhost:4000',
+      COORDINATOR_WS: 'ws://localhost:5000'
+    };
+
+    const COORDINATOR_WS = (defaultConfig.COORDINATOR_WS || 'ws://localhost:5000').replace(/\/+$/, '');
+
+    // Parámetros del mundo recibidos en 'welcome'
+    let worldConfig = {
+      width: 800,
+      height: 600,
+      playerRadius: 15,
+      tickRate: 20
+    };
+
+    // ── Utilidades ────────────────────────────────────────────────────────────
+    let redirecting = false;
+
+    function goToLogin(message, keepSession = false) {
+      if (redirecting) return;
+      redirecting = true;
+      if (!keepSession) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+      }
+      if (message) sessionStorage.setItem('session_message', message);
+      window.location.replace('login.html');
+    }
+
+    function setConnState(state, text) {
+      const el = document.getElementById('conn-status');
+      el.dataset.state = state;
+      document.getElementById('conn-status-text').textContent = text;
+    }
+
+    function renderPlayersList(players) {
+      const listEl  = document.getElementById('players-list');
+      const countEl = document.getElementById('players-count');
+      countEl.textContent = `${players.length} ${players.length === 1 ? 'conectado' : 'conectados'}`;
+      listEl.innerHTML = '';
+
+      if (players.length === 0) {
+        const emptyLi = document.createElement('li');
+        emptyLi.className = 'player-item';
+        emptyLi.textContent = 'No hay jugadores conectados';
+        listEl.appendChild(emptyLi);
+        return;
+      }
+
+      for (const p of players) {
+        const li      = document.createElement('li');
+        li.className  = 'player-item';
+
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'player-info';
+
+        const dot = document.createElement('span');
+        dot.className = 'status-dot';
+
+        const providerBadge = document.createElement('span');
+        providerBadge.style.marginRight = '0.35rem';
+        providerBadge.textContent = p.provider === 'google' ? '🌐' : '👤';
+        providerBadge.title = p.provider === 'google' ? 'Cuenta Google' : 'Cuenta Local';
+
+        const nameSpan = document.createElement('strong');
+        nameSpan.textContent = p.username;
+
+        infoDiv.appendChild(dot);
+        infoDiv.appendChild(providerBadge);
+        infoDiv.appendChild(nameSpan);
+
+        if (p.username && currentUsername &&
+            p.username.toLowerCase() === currentUsername.toLowerCase()) {
+          li.classList.add('is-me');
+          const youBadge = document.createElement('span');
+          youBadge.className = 'badge';
+          youBadge.textContent = 'Tú';
+          infoDiv.appendChild(youBadge);
+        }
+
+        const idSpan = document.createElement('span');
+        idSpan.style.color    = 'var(--text-muted)';
+        idSpan.style.fontSize = '0.82rem';
+        idSpan.textContent    = p.userId !== undefined ? `ID: ${p.userId}` : '';
+
+        li.appendChild(infoDiv);
+        li.appendChild(idSpan);
+        listEl.appendChild(li);
+      }
+    }
+
+    // ── RENDERIZADO DEL CANVAS ────────────────────────────────────────────────
+    const canvas = document.getElementById('game-canvas');
+    const ctx = canvas.getContext('2d');
+
+    function renderCanvas(players) {
+      if (!ctx) return;
+
+      // Limpiar fondo
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Dibujar cuadrícula sutil
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 1;
+      const gridSize = 40;
+      for (let x = 0; x < canvas.width; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+
+      // Dibujar cada jugador enviado por el servidor autoritativo
+      for (const p of players) {
+        const isMe = p.username && currentUsername && p.username.toLowerCase() === currentUsername.toLowerCase();
+        const radius = worldConfig.playerRadius || 15;
+        const color = (p.extras && p.extras.color) ? p.extras.color : (isMe ? '#10b981' : '#3b82f6');
+        const mood = (p.extras && p.extras.mood) ? p.extras.mood : '';
+
+        // Sombra de brillo
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = isMe ? 12 : 6;
+
+        // Círculo del jugador
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+
+        // Borde exterior
+        ctx.lineWidth = isMe ? 3 : 1.5;
+        ctx.strokeStyle = isMe ? '#ffffff' : 'rgba(255,255,255,0.7)';
+        ctx.stroke();
+        ctx.restore();
+
+        // Mood emoji encima de la cabeza
+        if (mood) {
+          ctx.font = '14px system-ui';
+          ctx.textAlign = 'center';
+          ctx.fillText(mood, p.x, p.y - radius - 16);
+        }
+
+        // Nombre de usuario y badge de provider
+        ctx.font = isMe ? 'bold 12px system-ui' : '11px system-ui';
+        ctx.fillStyle = isMe ? '#6ee7b7' : '#f8fafc';
+        ctx.textAlign = 'center';
+        const providerIcon = p.provider === 'google' ? '🌐' : '👤';
+        ctx.fillText(`${providerIcon} ${p.username}`, p.x, p.y - radius - 4);
+      }
+    }
+
+    // ── Inicio ────────────────────────────────────────────────────────────────
+    document.getElementById('current-username').textContent = currentUsername;
+
+    if (!originalToken) {
+      goToLogin('Debes iniciar sesión para acceder al lobby.');
+    } else {
+      startLobby();
+    }
+
+    function startLobby() {
+      let intentionalClose   = false;
+      let receivedPlayersList = false;
+
+      setConnState('connecting', 'Conectando...');
+      const ws = new WebSocket(`${COORDINATOR_WS}/connect?token=${encodeURIComponent(originalToken)}`);
+
+      // ── ENTRADA DE TECLADO: INTENTOS DE MOVIMIENTO ────────────────────────
+      const activeKeys = { x: 0, y: 0 };
+      let lastSentIntent = { x: 0, y: 0 };
+
+      function updateAndSendIntent() {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const dir = { x: activeKeys.x, y: activeKeys.y };
+
+        // Solo enviar si la intención cambió para ahorrar ancho de banda
+        if (dir.x !== lastSentIntent.x || dir.y !== lastSentIntent.y) {
+          lastSentIntent = dir;
+          ws.send(JSON.stringify({
+            type: 'intent',
+            intent: { dir }
+          }));
+        }
+      }
+
+      window.addEventListener('keydown', (e) => {
+        // Evitar scroll de la página con flechas
+        const k = e.key.toLowerCase();
+        let handled = false;
+
+        if (k === 'arrowleft' || k === 'a')  { activeKeys.x = -1; handled = true; }
+        if (k === 'arrowright' || k === 'd') { activeKeys.x = 1;  handled = true; }
+        if (k === 'arrowup' || k === 'w')    { activeKeys.y = -1; handled = true; }
+        if (k === 'arrowdown' || k === 's')  { activeKeys.y = 1;  handled = true; }
+
+        if (handled) {
+          e.preventDefault();
+          updateAndSendIntent();
+        }
+      });
+
+      window.addEventListener('keyup', (e) => {
+        const k = e.key.toLowerCase();
+        let handled = false;
+
+        if ((k === 'arrowleft' || k === 'a')  && activeKeys.x === -1) { activeKeys.x = 0; handled = true; }
+        if ((k === 'arrowright' || k === 'd') && activeKeys.x === 1)  { activeKeys.x = 0; handled = true; }
+        if ((k === 'arrowup' || k === 'w')    && activeKeys.y === -1) { activeKeys.y = 0; handled = true; }
+        if ((k === 'arrowdown' || k === 's')  && activeKeys.y === 1)  { activeKeys.y = 0; handled = true; }
+
+        if (handled) {
+          updateAndSendIntent();
+        }
+      });
+
+      // ── FEATURE EXTRA: ENVÍO DE EXTRAS ────────────────────────────────────
+      function sendExtras() {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const color = document.getElementById('player-color-picker').value;
+        const mood  = document.getElementById('player-mood-picker').value;
+        ws.send(JSON.stringify({
+          type: 'extras_update',
+          extras: { color, mood }
+        }));
+      }
+
+      document.getElementById('player-color-picker').addEventListener('input', sendExtras);
+      document.getElementById('player-mood-picker').addEventListener('change', sendExtras);
+
+      // ── CAPA 1: Polling de localStorage (detección client-side) ───────────
+      const tokenPollInterval = setInterval(() => {
+        const currentToken = localStorage.getItem('token');
+        if (currentToken !== originalToken) {
+          clearInterval(tokenPollInterval);
+          console.warn('[SECURITY] Token modificado en localStorage. Cerrando sesión.');
+          intentionalClose = true;
+          if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+            ws.close(1000, 'token tampered client-side');
+          }
+          goToLogin('Sesión cerrada: se detectó una modificación no autorizada del token de sesión.');
+        }
+      }, 2000);
+
+      window.addEventListener('storage', (e) => {
+        if (e.key === 'token' && e.newValue !== originalToken) {
+          clearInterval(tokenPollInterval);
+          intentionalClose = true;
+          if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+            ws.close(1000, 'token tampered from another tab');
+          }
+          goToLogin('Sesión cerrada: se detectó una modificación no autorizada del token de sesión.');
+        }
+      });
+
+      ws.onopen = () => {
+        console.log('[WS] Conectado al coordinador.');
+        setConnState('connected', 'Conectado');
+        // Enviar extras iniciales al conectar
+        setTimeout(sendExtras, 100);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+
+          // 1. Bienvenida con configuración de dimensiones del mundo
+          if (msg.type === 'welcome' && msg.world) {
+            worldConfig = msg.world;
+            canvas.width  = msg.world.width;
+            canvas.height = msg.world.height;
+            return;
+          }
+
+          // 2. Estado autoritativo del juego transmitido a 20 Hz
+          if (msg.type === 'state' && Array.isArray(msg.players)) {
+            // Guardamos en la variable global para inspección / trampa en DevTools
+            window.lastState = msg;
+            renderCanvas(msg.players);
+            renderPlayersList(msg.players);
+            return;
+          }
+
+          // 3. Actualización de lista simple de jugadores
+          if (msg.type === 'players_update' && Array.isArray(msg.players)) {
+            renderPlayersList(msg.players);
+            return;
+          }
+
+          // 4. Verificación de token (auth_challenge)
+          if (msg.type === 'auth_challenge') {
+            const currentToken = localStorage.getItem('token');
+            ws.send(JSON.stringify({
+              type: 'auth_response',
+              data: { token: currentToken }
+            }));
+          }
+
+        } catch (err) {
+          console.error('[WS] Error procesando mensaje:', err);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error('[WS] Error de conexión:', err);
+      };
+
+      ws.onclose = (event) => {
+        clearInterval(tokenPollInterval);
+        setConnState('disconnected', 'Desconectado');
+
+        if (intentionalClose) {
+          goToLogin('Has cerrado sesión correctamente.');
+          return;
+        }
+
+        let reasonMsg   = 'La conexión con el coordinador se cerró inesperadamente.';
+        let keepSession = false;
+
+        if (event.code === 4001 || event.reason === 'invalid token') {
+          reasonMsg = 'Sesión terminada: Token inválido o expirado. Por favor vuelve a iniciar sesión.';
+        } else if (event.code === 4002) {
+          reasonMsg   = 'Tu sesión fue desconectada porque abriste el juego en otra pestaña.';
+          keepSession = true;
+        } else if (event.code === 4003) {
+          reasonMsg = 'Sesión cerrada: se detectó una modificación no autorizada del token de sesión.';
+        }
+
+        goToLogin(reasonMsg, keepSession);
+      };
+
+      // Botón Cerrar sesión
+      document.getElementById('logout-btn').addEventListener('click', () => {
+        clearInterval(tokenPollInterval);
+        intentionalClose = true;
+        setConnState('disconnected', 'Desconectando...');
+        document.getElementById('logout-btn').disabled = true;
+
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close(1000, 'user logout');
+          setTimeout(() => goToLogin('Has cerrado sesión correctamente.'), 1500);
+        } else {
+          goToLogin('Has cerrado sesión correctamente.');
+        }
+      });
+    }
+  </script>
+</body>
+</html>

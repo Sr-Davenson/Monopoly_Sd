@@ -49,8 +49,8 @@ const envId          = (name) => (fromCli ? undefined : process.env[name]);
 const PORT           = Number(args.port || positionals[0] || process.env.PORT || process.env.COORDINATOR_PORT || 5000);
 const PEER_PORT      = Number(args['peer-port'] || envId('PEER_PORT') || PORT + 100);
 const COORDINATOR_ID = args.id || envId('COORDINATOR_ID') || `coord-${PORT}`;
-const PUBLIC_URL     = (args['public-url'] || envId('PUBLIC_URL') || `ws://localhost:${PORT}`).replace(/\/+$/, '');
-const PEER_URL       = (args['peer-url'] || envId('PEER_URL') || `ws://localhost:${PEER_PORT}`).replace(/\/+$/, '');
+const PUBLIC_URL     = (args['public-url'] || process.env.PUBLIC_URL || `ws://localhost:${PORT}`).replace(/\/+$/, '');
+const PEER_URL       = (args['peer-url'] || process.env.PEER_URL || `ws://localhost:${PEER_PORT}`).replace(/\/+$/, '');
 const AUTH_URL       = (args['auth-url'] || process.env.AUTH_URL || 'http://localhost:4000').replace(/\/+$/, '');
 const JWT_SECRET     = process.env.JWT_SECRET;
 
@@ -1111,13 +1111,13 @@ async function directoryCycle() {
         connectedPlayers: clients.size,
         uptime: Math.round((Date.now() - STARTED_AT) / 1000)
       }),
-      signal: AbortSignal.timeout(1500)
+      signal: AbortSignal.timeout(5000)
     });
     if (!res.ok) throw new Error(`heartbeat respondió ${res.status}`);
 
     const peersRes = await fetch(`${AUTH_URL}/peers`, {
       headers: { 'ngrok-skip-browser-warning': 'true' },
-      signal: AbortSignal.timeout(1500)
+      signal: AbortSignal.timeout(5000)
     });
     const { peers: list = [] } = await peersRes.json();
 
