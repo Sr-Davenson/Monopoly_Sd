@@ -152,12 +152,19 @@ function buildBoard() {
     center.append(el('div', { class: `section-label s${m.side}`, '--section-color': m.color }, `${m.world} · ${m.sectionName}`));
   }
 
+  // Capa de fichas animadas (se recrea junto con el tablero)
+  board.querySelector('.token-layer')?.remove();
+  tokenAnim.clear();
+  lastMoveRollT = null;
+  board.append(el('div', { class: 'token-layer', id: 'token-layer', 'aria-hidden': 'true' }));
+
   for (const s of config.spaces) {
     const { row, col } = gridPos(s.id);
     const member = s.memberId ? memberById(s.memberId) : null;
     const corner = ['start', 'jail', 'rest', 'go_to_jail'].includes(s.type);
+    const side = s.id < 10 ? 'bottom' : s.id < 20 ? 'left' : s.id < 30 ? 'top' : 'right';
     const cell = el('div', {
-      class: `space ${corner ? 'corner' : ''}`,
+      class: `space ${corner ? 'corner' : `side-${side}`} ${s.type === 'property' ? 'is-prop' : ''}`,
       id: `space-${s.id}`,
       style: `grid-row:${row};grid-column:${col}`,
       '--section-color': member ? member.color : '#334155',
@@ -197,21 +204,195 @@ function renderBoard() {
       parts.push(b);
     }
 
-    const tokens = el('div', { class: 'tokens' });
-    for (const p of state.players) {
-      if (p.bankrupt || p.position !== s.id) continue;
-      const t = tokenOf(p.skin, '', p.color);
-      if (p.id === turnId) t.classList.add('current');
-      t.title = `${p.username} — ${p.skin.name}${p.inJail ? ' (en el calabozo)' : ''}`;
-      tokens.append(t);
-    }
     if (s.price && !owner && !corner) parts.push(el('div', { class: 'price' }, money(s.price)));
     else if (s.type === 'donation') parts.push(el('div', { class: 'price' }, money(s.amount)));
-    parts.push(tokens);
 
-    cell.replaceChildren(...parts);
+    // La franja de color va aparte (pegada al borde interior); el resto en .sbody
+    const strip = parts[0] && parts[0].classList.contains('strip') ? parts.shift() : null;
+    cell.replaceChildren(...(strip ? [strip] : []), el('div', { class: 'sbody' }, ...parts));
+  }
+  renderTokens(turnId);
+}
+
+// ── Fichas animadas ──────────────────────────────────────────────────────────
+// Las fichas viven en una capa encima del tablero. Cuando el servidor manda
+// una posición nueva, la ficha camina casilla por casilla hasta llegar.
+const BOARD_SIZE   = 40;
+const JAIL_POS     = 10;
+const STEP_MS      = 420;   // duración de cada paso (lento, para ver el recorrido)
+const LONG_TRIP_MS = 7000;  // tope de duración para recorridos muy largos (tarjetas)
+const DICE_WAIT_MS = 500;   // espera a que terminen de girar los dados
+const tokenAnim = new Map(); // playerId -> { wrap, art, skinId, shown, target, busy }
+let lastMoveRollT = null;
+
+// Zona de la casilla donde se paran las fichas: el borde exterior, para no
+// tapar el nombre (el contenido de la casilla está pegado al borde interior).
+// axis = eje a lo largo del cual se reparten varias fichas en la misma casilla.
+function tokenAnchor(pos) {
+  const cell = $(`space-${pos}`);
+  const x = cell.offsetLeft, y = cell.offsetTop, w = cell.offsetWidth, h = cell.offsetHeight;
+  if (pos === 0)  return { x: x + w / 2,    y: y + h * 0.76, axis: 'x', inward: [-1, 0] };
+  if (pos === 10) return { x: x + w / 2,    y: y + h * 0.76, axis: 'x', inward: [1, 0] };
+  if (pos === 20) return { x: x + w / 2,    y: y + h * 0.24, axis: 'x', inward: [1, 0] };
+  if (pos === 30) return { x: x + w / 2,    y: y + h * 0.24, axis: 'x', inward: [-1, 0] };
+  if (pos < 10)   return { x: x + w / 2,    y: y + h * 0.78, axis: 'x', inward: [0, -1] };
+  if (pos < 20)   return { x: x + w * 0.22, y: y + h / 2,    axis: 'y', inward: [1, 0] };
+  if (pos < 30)   return { x: x + w / 2,    y: y + h * 0.22, axis: 'x', inward: [0, 1] };
+  return            { x: x + w * 0.78, y: y + h / 2,    axis: 'y', inward: [-1, 0] };
+}
+
+// Coloca cada ficha en su casilla visible, repartiendo las que comparten casilla
+function placeTokens() {
+  const layer = $('token-layer');
+  if (!layer) return;
+  const sample = $('space-1');
+  const narrow = Math.min(sample.offsetWidth, sample.offsetHeight);
+  const deep = Math.max(sample.offsetWidth, sample.offsetHeight);
+  const size = Math.max(16, Math.min(narrow * 0.48, deep * 0.32));
+  layer.style.setProperty('--tok', `${size}px`);
+
+  const byCell = new Map();
+  for (const [id, a] of tokenAnim) {
+    if (!byCell.has(a.shown)) byCell.set(a.shown, []);
+    byCell.get(a.shown).push(id);
+  }
+  for (const [pos, ids] of byCell) {
+    const c = tokenAnchor(pos);
+    const cell = $(`space-${pos}`);
+    const span = c.axis === 'x' ? cell.offsetWidth : cell.offsetHeight;
+    const n = ids.length;
+    const cols = Math.min(n, 3);
+    const rows = Math.ceil(n / 3);
+    const step = Math.min(size * 0.95, (span * 0.9 - size) / Math.max(1, cols - 1));
+    ids.forEach((id, i) => {
+      const a = tokenAnim.get(id);
+      const col = i % 3, row = Math.floor(i / 3);
+      const rowCols = row === rows - 1 ? n - row * 3 : 3;
+      const along = (col - (rowCols - 1) / 2) * step;
+      const depth = row * size * 0.75;
+      const dx = (c.axis === 'x' ? along : 0) + c.inward[0] * depth;
+      const dy = (c.axis === 'y' ? along : 0) + c.inward[1] * depth;
+      a.wrap.style.transform = `translate(${c.x + dx - size / 2}px, ${c.y + dy - size / 2}px)`;
+      a.wrap.style.zIndex = a.busy ? 5 : 2;
+    });
   }
 }
+
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+function hop(a) {
+  a.wrap.classList.remove('hop'); void a.wrap.offsetWidth; a.wrap.classList.add('hop');
+}
+
+// Construye el recorrido: [{ kind: 'walk', dir: ±1, steps }, { kind: 'jump', to }]
+function planPath(from, to, p, rolled) {
+  const fwd = (to - from + BOARD_SIZE) % BOARD_SIZE;
+  const back = (from - to + BOARD_SIZE) % BOARD_SIZE;
+  if (rolled && !(rolled.wasInJail && p.inJail)) {
+    const landing = (from + rolled.sum) % BOARD_SIZE;
+    // Cayó en "Ve al calabozo": camina hasta allí y luego salta a la cárcel
+    if (p.inJail && to === JAIL_POS) {
+      return rolled.tripleDoubles
+        ? [{ kind: 'jump', to }] // tres dobles: directo a la cárcel sin moverse
+        : [{ kind: 'walk', dir: 1, steps: rolled.sum }, { kind: 'jump', to }];
+    }
+    // Camina lo que marcaron los dados y luego, si una tarjeta lo movió, sigue
+    const path = [{ kind: 'walk', dir: 1, steps: rolled.sum }];
+    if (landing !== to) path.push(...planPath(landing, to, p, null));
+    return path;
+  }
+  if (p.inJail && to === JAIL_POS) return [{ kind: 'jump', to }];
+  if (back <= 3 && back < fwd) return [{ kind: 'walk', dir: -1, steps: back }];
+  return [{ kind: 'walk', dir: 1, steps: fwd }];
+}
+
+async function animateToken(id, path) {
+  const a = tokenAnim.get(id);
+  a.busy = true;
+  const total = path.reduce((n, s) => n + (s.kind === 'walk' ? s.steps : 1), 0);
+  const stepMs = Math.min(STEP_MS, Math.max(140, LONG_TRIP_MS / total));
+  a.wrap.style.setProperty('--step', `${stepMs}ms`);
+  for (const seg of path) {
+    if (!tokenAnim.has(id)) return;
+    if (seg.kind === 'jump') {
+      a.wrap.classList.add('teleport');
+      await wait(260);
+      a.shown = seg.to; placeTokens();
+      await wait(40);
+      a.wrap.classList.remove('teleport');
+      await wait(300);
+      continue;
+    }
+    for (let i = 0; i < seg.steps; i++) {
+      a.shown = (a.shown + seg.dir + BOARD_SIZE) % BOARD_SIZE;
+      hop(a);
+      placeTokens();
+      $(`space-${a.shown}`).classList.add('stepped');
+      setTimeout((pos => () => $(`space-${pos}`).classList.remove('stepped'))(a.shown), stepMs + 250);
+      await wait(stepMs);
+    }
+  }
+  a.busy = false;
+  // Si llegó otra actualización mientras caminaba, sigue hacia el nuevo destino
+  if (a.shown !== a.target) {
+    const p = state.players.find(x => x.id === id);
+    if (p) return animateToken(id, planPath(a.shown, a.target, p, null));
+  }
+  placeTokens();
+}
+
+function renderTokens(turnId) {
+  const layer = $('token-layer');
+  // Detecta una tirada nueva de dados (para saber cuánto caminó el jugador)
+  const rollEntry = [...state.log].reverse().find(l => l.text.includes(' sacó '));
+  let rolled = null;
+  if (rollEntry && rollEntry.t !== lastMoveRollT) {
+    const first = lastMoveRollT === null;
+    lastMoveRollT = rollEntry.t;
+    if (!first && state.turn && state.turn.dice) {
+      const after = state.log.slice(state.log.indexOf(rollEntry) + 1);
+      rolled = {
+        playerId: state.turn.playerId,
+        sum: state.turn.dice[0] + state.turn.dice[1],
+        tripleDoubles: after.some(l => l.text.includes('dobles seguidos'))
+      };
+    }
+  }
+
+  const alive = new Set();
+  for (const p of state.players) {
+    if (p.bankrupt) continue;
+    alive.add(p.id);
+    let a = tokenAnim.get(p.id);
+    if (!a || a.skinId !== p.skin.id) {
+      if (a) a.wrap.remove();
+      const art = tokenOf(p.skin, '', p.color);
+      const wrap = el('div', { class: 'ptoken fresh' }, art);
+      requestAnimationFrame(() => requestAnimationFrame(() => wrap.classList.remove('fresh')));
+      layer.append(wrap);
+      a = { wrap, art, skinId: p.skin.id, shown: a ? a.shown : p.position, target: a ? a.target : p.position, busy: false, inJail: p.inJail };
+      tokenAnim.set(p.id, a);
+    }
+    a.art.classList.toggle('current', p.id === turnId);
+    a.wrap.title = `${p.username} — ${p.skin.name}${p.inJail ? ' (en el calabozo)' : ''}`;
+
+    const wasInJail = a.inJail;
+    a.inJail = p.inJail;
+    if (a.target === p.position) continue;
+    a.target = p.position;
+    if (a.busy) continue; // animateToken retomará el nuevo destino al terminar
+    const r = rolled && rolled.playerId === p.id ? { ...rolled, wasInJail } : null;
+    const path = planPath(a.shown, p.position, p, r);
+    a.busy = true;
+    wait(r ? DICE_WAIT_MS : 0).then(() => animateToken(p.id, path));
+  }
+  for (const [id, a] of tokenAnim) {
+    if (!alive.has(id)) { a.wrap.remove(); tokenAnim.delete(id); }
+  }
+  placeTokens();
+}
+
+window.addEventListener('resize', () => { if (state && config) placeTokens(); });
 
 // ── Centro: turno, dados y acciones ──────────────────────────────────────────
 function renderCenter() {
