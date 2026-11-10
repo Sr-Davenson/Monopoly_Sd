@@ -1,49 +1,51 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// PLANTILLA DE INTEGRANTES
+// INTEGRANTES Y SUS MUNDOS
 //
 // Cada integrante es dueño de un lado del tablero (9 casillas entre dos
-// esquinas). Aquí cada uno escribe su idea central; el resto del juego
-// (tablero, temáticas, skins) lee estos datos.
+// esquinas). El resto del juego (tablero, temáticas, fichas) lee estos datos.
 //
-// Para completar tu sección:
-//   1. Escribe tu idea central en `idea`.
-//   2. Pon el nombre de tu sección en `sectionName`.
-//   3. Ve a board.js y renombra tus propiedades / grupos.
-//   4. Ve a themes.js y define tus fichas (skins) y tu caja.
+//   lado 0 → casillas 1-9   (entre Salida y Calabozo)          — Piratas
+//   lado 1 → casillas 11-19 (entre Calabozo y Taberna)         — Fantasía
+//   lado 2 → casillas 21-29 (entre Taberna y Ve al Calabozo)   — Vikingos
+//   lado 3 → casillas 31-39 (entre Ve al Calabozo y Salida)    — Literatura
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MEMBERS = [
   {
     id: 'david',
     name: 'David',
-    side: 0,                 // casillas 1-9  (entre Salida y Cárcel)
-    color: '#ef4444',
-    sectionName: '[Sección de David]',
-    idea: '[Idea central de David por definir]'
+    side: 0,
+    color: '#e05a47',
+    world: 'Piratas',
+    sectionName: 'Mar de los Corsarios',
+    idea: 'Islas, galeones y tesoros enterrados: el Caribe de los bucaneros.'
   },
   {
     id: 'jossef',
     name: 'Jossef',
-    side: 1,                 // casillas 11-19 (entre Cárcel y Descanso)
-    color: '#22c55e',
-    sectionName: '[Sección de Jossef]',
-    idea: '[Idea central de Jossef por definir]'
+    side: 1,
+    color: '#46b98a',
+    world: 'Fantasía',
+    sectionName: 'Reinos Encantados',
+    idea: 'Bosques feéricos, magos y dragones: el mundo de las leyendas artúricas.'
   },
   {
     id: 'sebastian',
     name: 'Sebastian',
-    side: 2,                 // casillas 21-29 (entre Descanso y Ve a la cárcel)
-    color: '#3b82f6',
-    sectionName: '[Sección de Sebastian]',
-    idea: '[Idea central de Sebastian por definir]'
+    side: 2,
+    color: '#5b9bd5',
+    world: 'Vikingos',
+    sectionName: 'Tierras del Norte',
+    idea: 'Fiordos helados, saqueos y el camino hacia el Valhalla.'
   },
   {
     id: 'santiago',
     name: 'Santiago',
-    side: 3,                 // casillas 31-39 (entre Ve a la cárcel y Salida)
-    color: '#a855f7',
-    sectionName: '[Sección de Santiago]',
-    idea: '[Idea central de Santiago por definir]'
+    side: 3,
+    color: '#c58b4f',
+    world: 'Literatura',
+    sectionName: 'Barrio de las Letras',
+    idea: 'Lugares de los grandes libros: Kafka, Orwell, Huxley, Camus, Leblanc y García Márquez.'
   }
 ];
 
