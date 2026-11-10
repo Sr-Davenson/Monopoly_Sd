@@ -7,7 +7,5 @@ node_modules/
 .env.example
 codigoBase/
 SSD_TALLER_4.md
-README.md
-package-lock.json
-package.json
+SSD_TALLER_6.md
 contexto/
