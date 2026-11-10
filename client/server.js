@@ -5,6 +5,7 @@ const cors = require('cors');
 
 const PORT = Number(process.env.PORT || 3000);
 const AUTH_URL = process.env.AUTH_URL || 'http://localhost:4000';
+const COORDINATOR_WS = process.env.COORDINATOR_WS || 'wss://chatting-sustained-punctured.ngrok-free.dev';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '786041305351-sj20hhmusecqdqtg9qactcnjqcq3o3ta.apps.googleusercontent.com';
 
 const app = express();
@@ -16,6 +17,7 @@ app.get('/config.js', (req, res) => {
   res.send(
     `window.APP_CONFIG = ${JSON.stringify({
       AUTH_URL,
+      COORDINATOR_WS,
       GOOGLE_CLIENT_ID
     })};\n`
   );

@@ -143,11 +143,11 @@
     const currentUsername  = localStorage.getItem('username') || 'Jugador';
 
     const defaultConfig = window.APP_CONFIG || {
-      AUTH_URL: 'http://localhost:4000',
-      COORDINATOR_WS: 'ws://localhost:5000'
+      AUTH_URL: 'https://onboard-pantyhose-written.ngrok-free.dev',
+      COORDINATOR_WS: 'wss://chatting-sustained-punctured.ngrok-free.dev'
     };
 
-    const COORDINATOR_WS = (defaultConfig.COORDINATOR_WS || 'ws://localhost:5000').replace(/\/+$/, '');
+    const COORDINATOR_WS = (defaultConfig.COORDINATOR_WS || 'wss://chatting-sustained-punctured.ngrok-free.dev').replace(/\/+$/, '');
 
     // Parámetros del mundo recibidos en 'welcome'
     let worldConfig = {
