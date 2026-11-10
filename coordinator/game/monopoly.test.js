@@ -199,3 +199,45 @@ test('acciones fuera de etapa no cambian el estado', () => {
   assert.throws(() => g.handle(a.id, '', 'buy'), GameError);
   assert.equal(g.version, v);
 });
+
+// ── Taller 6: fichas, misiones y replicación ─────────────────────────────────
+const { THEMES, isUnlocked } = require('./themes');
+
+test('se puede elegir una ficha de la temática y se rechaza una ajena', () => {
+  const g = new MonopolyGame({ rng: scriptedRng() });
+  g.handle('1', 'p1', 'join', { themeId: 'tema_santiago', skinId: 'santiago_sisifo' });
+  assert.equal(g.getPlayer('1').skin.id, 'santiago_sisifo');
+  assert.throws(() => g.handle('2', 'p2', 'join', { themeId: 'tema_david', skinId: 'santiago_samsa' }), /no pertenece/);
+});
+
+test('cada temática tiene exactamente una ficha inicial y misiones en las demás', () => {
+  for (const t of THEMES) {
+    assert.equal(t.skins.filter(s => s.starter).length, 1, t.id);
+    for (const s of t.skins.filter(x => !x.starter)) {
+      assert.ok(s.unlock && s.unlock.count > 0, s.id);
+      assert.equal(isUnlocked(s, {}), false);
+      assert.equal(isUnlocked(s, { [s.unlock.stat]: s.unlock.count }), true);
+    }
+  }
+});
+
+test('serialize/load reproduce la partida completa en otra instancia', () => {
+  const { g, rng, a } = newGame(3);
+  rng.dice.push(1, 2);
+  g.handle(a.id, '', 'roll');
+  g.handle(a.id, '', 'buy');
+  const copy = new MonopolyGame({ rng: scriptedRng() });
+  copy.load(g.serialize());
+  assert.deepEqual(copy.toJSON(), g.toJSON());
+  assert.deepEqual(copy.decks, g.decks);
+  assert.equal(copy.getPlayer(a.id).stats.bought, 1);
+});
+
+test('al terminar, results() reporta ganador y estadísticas', () => {
+  const { g, a, b } = newGame();
+  g.handle(b.id, '', 'forfeit');
+  const r = g.results();
+  assert.ok(r.matchId);
+  assert.equal(r.players.find(p => p.userId === a.id).won, true);
+  assert.equal(r.players.find(p => p.userId === b.id).won, false);
+});
