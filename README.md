@@ -109,7 +109,7 @@ Cualquier otro coordinador: `node index.js --id coord-x --port 5004 --peer-port 
 | coordinator | `--public-url` / `PUBLIC_URL` | `ws://localhost:<port>` | URL que el auth entrega a los clientes |
 | coordinator | `--peer-url` / `PEER_URL` | `ws://localhost:<peer-port>` | URL a la que se conectan los pares |
 | coordinator | `--auth-url` / `AUTH_URL` | `http://localhost:4000` | Dónde enviar heartbeats |
-| coordinator | `DISCONNECT_GRACE_MS`, `ROOM_ABANDON_MS` | `30000`, `90000` | Saltar turno de un desconectado / liberar sala abandonada |
+| coordinator | `TURN_TIMEOUT_MS`, `DISCONNECT_GRACE_MS`, `ROOM_ABANDON_MS` | `90000`, `30000`, `90000` | Tiempo por turno (al vencer pasa al siguiente) / tiempo para reconectarse antes de salir de la partida / liberar sala abandonada |
 | client | `PORT`, `AUTH_URL`, `GOOGLE_CLIENT_ID` | | El cliente **ya no tiene** URL de coordinador fija |
 
 > Si se pasa `--port` por línea de comandos, el coordinador ignora `COORDINATOR_ID`, `PEER_PORT`, `PUBLIC_URL` y `PEER_URL` del `.env`, para que varios coordinadores lanzados desde la misma carpeta no compartan identidad.
@@ -206,7 +206,7 @@ El tablero es por turnos y usa azar (dados, cartas): reaplicar la *acción* en c
 
 - Se acepta un `room_state` si su versión es mayor que la local.
 - Si dos coordinadores escriben la **misma versión** a la vez (dos jugadores actuando en el mismo milisegundo en coordinadores distintos), gana el `writer` con id menor. Todos aplican la misma regla, así que convergen al mismo estado; la acción perdedora se descarta (el jugador la ve revertirse y puede repetirla).
-- Los temporizadores de sala (saltar el turno de un desconectado, liberar una sala abandonada) solo los ejecuta el **líder**: el coordinador vivo con el id menor. Si el líder cae, el siguiente toma el rol.
+- Los temporizadores de sala (fin del tiempo del turno, sacar a quien no se reconectó en 30 s, liberar una sala abandonada) solo los ejecuta el **líder**: el coordinador vivo con el id menor. Si el líder cae, el siguiente toma el rol.
 
 ---
 

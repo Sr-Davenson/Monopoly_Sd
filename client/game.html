@@ -12,6 +12,7 @@
   <script src="config.js"></script>
   <script src="tokens.js"></script>
   <script src="net.js"></script>
+  <script src="sounds.js"></script>
 </head>
 <body class="game-body">
   <header class="game-header">
@@ -25,6 +26,7 @@
       <span id="me-token"></span>
       <span>Jugador: <strong id="me-name">...</strong></span>
       <span id="me-money" class="money-pill" hidden></span>
+      <button id="sound-btn" class="btn btn-small btn-ghost sound-btn" type="button" aria-pressed="true" title="Activar o silenciar sonidos">🔊</button>
       <a href="lobby.html" class="btn btn-small btn-ghost">← Lobby</a>
     </div>
   </header>
@@ -61,6 +63,10 @@
             </div>
           </div>
           <div id="turn-info" class="turn-info"></div>
+          <div id="turn-timer" class="turn-timer" hidden>
+            <div class="turn-timer-bar"><span id="turn-timer-fill"></span></div>
+            <span id="turn-timer-text" class="turn-timer-text">1:30</span>
+          </div>
           <div class="dice-row">
             <div id="die-1" class="die">–</div>
             <div id="die-2" class="die">–</div>
@@ -90,8 +96,7 @@
 
       <div class="panel">
         <h3>Intercambios</h3>
-        <div id="trade-incoming"></div>
-        <div id="trade-form" class="trade-form"></div>
+        <div id="trade-summary" class="trade-summary small"></div>
       </div>
 
       <div class="panel">
@@ -100,6 +105,32 @@
       </div>
     </aside>
   </main>
+
+  <!-- Ventana flotante de intercambios (se puede arrastrar desde la barra) -->
+  <section id="trade-window" class="float-win" role="dialog" aria-labelledby="trade-win-title" hidden>
+    <header class="float-win-bar" id="trade-win-bar">
+      <span class="float-win-grip" aria-hidden="true">⠿</span>
+      <h3 id="trade-win-title">Intercambio</h3>
+      <button id="trade-win-close" class="float-win-close" type="button" aria-label="Cerrar">✕</button>
+    </header>
+    <div id="trade-win-body" class="float-win-body"></div>
+  </section>
+
+  <!-- Logros: skins desbloqueadas -->
+  <div id="achievements" class="achievements" aria-live="polite"></div>
+
+  <!-- Fin de la partida -->
+  <div id="end-modal" class="modal-backdrop" hidden>
+    <div class="modal end-card" role="dialog" aria-modal="true" aria-labelledby="end-title">
+      <div class="confetti" aria-hidden="true"></div>
+      <div class="end-kicker">Fin de la partida</div>
+      <div id="end-token" class="end-token"></div>
+      <h2 id="end-title" class="end-title"></h2>
+      <p id="end-sub" class="end-sub"></p>
+      <ol id="end-ranking" class="end-ranking"></ol>
+      <div id="end-actions" class="end-actions"></div>
+    </div>
+  </div>
 
   <div id="toast" class="toast" role="status" hidden></div>
 

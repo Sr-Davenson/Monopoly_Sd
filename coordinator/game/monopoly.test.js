@@ -241,3 +241,34 @@ test('al terminar, results() reporta ganador y estadísticas', () => {
   assert.equal(r.players.find(p => p.userId === a.id).won, true);
   assert.equal(r.players.find(p => p.userId === b.id).won, false);
 });
+
+test('el turno tiene 90 s; al vencer pasa al siguiente jugador', () => {
+  const { g, a, b } = newGame(3);
+  const id = g.turn.playerId;
+  assert.ok(g.turn.deadline > Date.now());
+  assert.equal(g.timeoutTurn(id), false, 'antes de tiempo no hace nada');
+  g.turn.deadline = Date.now() - 1;
+  assert.equal(g.timeoutTurn(id), true);
+  assert.notEqual(g.turn.playerId, id);
+  assert.ok(!a.bankrupt && !b.bankrupt);
+});
+
+test('desconectado más de 30 s queda fuera; si vuelve antes no', () => {
+  const { g, a, b } = newGame(3);
+  g.setConnected(b.id, false);
+  assert.equal(g.expelDisconnected(b.id, 30000), false, 'aún dentro de la gracia');
+  g.setConnected(b.id, true);
+  assert.equal(b.disconnectedAt, null);
+  g.setConnected(b.id, false);
+  b.disconnectedAt = Date.now() - 31000;
+  assert.equal(g.expelDisconnected(b.id, 30000), true);
+  assert.ok(b.bankrupt);
+  assert.equal(g.phase, 'playing');
+  // si solo queda uno, gana
+  const c = g.players[2];
+  g.setConnected(c.id, false);
+  c.disconnectedAt = Date.now() - 31000;
+  g.expelDisconnected(c.id, 30000);
+  assert.equal(g.phase, 'finished');
+  assert.equal(g.winnerId, a.id);
+});

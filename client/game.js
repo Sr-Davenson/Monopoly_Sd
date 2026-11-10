@@ -315,6 +315,7 @@ async function animateToken(id, path) {
   for (const seg of path) {
     if (!tokenAnim.has(id)) return;
     if (seg.kind === 'jump') {
+      flushAfterMove(a);
       a.wrap.classList.add('teleport');
       await wait(260);
       a.shown = seg.to; placeTokens();
@@ -326,6 +327,7 @@ async function animateToken(id, path) {
     for (let i = 0; i < seg.steps; i++) {
       a.shown = (a.shown + seg.dir + BOARD_SIZE) % BOARD_SIZE;
       hop(a);
+      Sound.play('step', themeOfPlayer(id), a.shown);
       placeTokens();
       $(`space-${a.shown}`).classList.add('stepped');
       setTimeout((pos => () => $(`space-${pos}`).classList.remove('stepped'))(a.shown), stepMs + 250);
@@ -339,6 +341,19 @@ async function animateToken(id, path) {
     if (p) return animateToken(id, planPath(a.shown, a.target, p, null));
   }
   placeTokens();
+  flushAfterMove(a);
+}
+
+function themeOfPlayer(id) {
+  const p = state && state.players.find(x => x.id === id);
+  return p ? p.themeId : null;
+}
+
+// Sonidos que deben sonar cuando la ficha llega (compra, renta, tarjeta...)
+function flushAfterMove(a) {
+  const queue = a.after || [];
+  a.after = [];
+  queue.forEach((fn, k) => setTimeout(fn, k * 350));
 }
 
 function renderTokens(turnId) {
@@ -499,7 +514,7 @@ function renderPlayers() {
       `${owned} prop.`,
       p.inJail ? 'en el calabozo' : '',
       p.jailCards ? `${p.jailCards} carta(s) de salida` : '',
-      p.connected ? '' : 'desconectado',
+      '',
       p.id === state.hostId ? 'anfitrión' : ''
     ].filter(Boolean).join(' · ');
     return el('li', {
@@ -509,7 +524,10 @@ function renderPlayers() {
       tokenOf(p.skin, '', p.color),
       el('div', { class: 'pname' },
         el('div', {}, p.username, p.id === myId ? ' (tú)' : ''),
-        el('div', { class: 'pmeta' }, meta)
+        el('div', { class: 'pmeta' }, meta),
+        !p.connected && !p.bankrupt && state.phase === 'playing'
+          ? el('div', { class: 'pmeta dc-count', 'data-since': p.disconnectedAt || serverNow() }, 'desconectado')
+          : (!p.connected ? el('div', { class: 'pmeta' }, 'desconectado') : '')
       ),
       el('span', { class: 'pmoney' }, money(p.money))
     );
@@ -619,80 +637,398 @@ function describeSide(side) {
   return parts.length ? parts.join(', ') : 'nada';
 }
 
-function renderTrade() {
-  const incoming = $('trade-incoming');
-  const form = $('trade-form');
-  incoming.replaceChildren();
-  form.replaceChildren();
-  if (state.phase !== 'playing') return;
+// La ventana flotante tiene dos modos:
+//   'propose' → formulario para armar una oferta (solo en tu turno)
+//   'offer'   → una oferta pendiente en la que participas (aceptar/rechazar/cancelar)
+let tradeWin = { open: false, mode: null, tradeId: null, dismissedTradeId: null, pos: null };
 
+function propChip(spaceId) {
+  const s = config.spaces[spaceId];
+  const color = s.type === 'property' ? config.groups[s.group].color : '#64748b';
+  return el('span', { class: 'prop-chip', '--group-color': color }, s.icon ? `${s.icon} ` : '', s.name);
+}
+
+function sideView(title, player, side) {
+  const items = [];
+  if (side.money) items.push(el('span', { class: 'money-chip' }, money(side.money)));
+  for (const id of side.properties) items.push(propChip(id));
+  if (side.jailCards) items.push(el('span', { class: 'prop-chip' }, `🗝 ${side.jailCards} carta(s) de salida`));
+  return el('div', { class: 'trade-side', '--player-color': player.color },
+    el('div', { class: 'trade-side-head' },
+      tokenOf(player.skin, 'sm', player.color),
+      el('div', {}, el('small', {}, title), el('strong', {}, player.username))),
+    el('div', { class: 'trade-items' }, items.length ? items : el('span', { class: 'text-muted' }, 'Nada'))
+  );
+}
+
+function canPropose() {
+  return !!state && state.phase === 'playing' && !state.trade && isMyTurn() && state.turn.stage !== 'buy';
+}
+
+function openTradeWindow(mode) {
+  tradeWin.open = true;
+  tradeWin.mode = mode;
+  const win = $('trade-window');
+  win.hidden = false;
+  if (tradeWin.pos) {
+    Object.assign(win.style, { left: `${tradeWin.pos.x}px`, top: `${tradeWin.pos.y}px`, right: 'auto', bottom: 'auto' });
+  }
+  win.classList.remove('pop'); void win.offsetWidth; win.classList.add('pop');
+  buildTradeWindow();
+}
+
+function closeTradeWindow() {
+  tradeWin.open = false;
+  tradeWin.mode = null;
+  $('trade-window').hidden = true;
+}
+
+function buildTradeWindow() {
+  const body = $('trade-win-body');
+  const title = $('trade-win-title');
   const t = state.trade;
-  if (t) {
+
+  if (tradeWin.mode === 'offer' && t) {
     const from = playerById(t.fromId), to = playerById(t.toId);
-    const box = el('div', { class: 'trade-box' },
-      el('div', {}, el('strong', {}, from.username), ' ofrece: ', describeSide(t.offer)),
-      el('div', {}, 'a ', el('strong', {}, to.username), ' a cambio de: ', describeSide(t.request))
-    );
+    tradeWin.tradeId = t.id;
+    title.textContent = t.toId === myId ? `Oferta de ${from.username}` : `Tu oferta a ${to.username}`;
+    const actions = el('div', { class: 'trade-actions' });
     if (t.toId === myId) {
-      box.append(el('div', { class: 'row' },
+      actions.append(
         el('button', { class: 'btn btn-success', onclick: () => act('trade_respond', { tradeId: t.id, accept: true }) }, 'Aceptar'),
         el('button', { class: 'btn btn-danger', onclick: () => act('trade_respond', { tradeId: t.id, accept: false }) }, 'Rechazar')
-      ));
+      );
     } else if (t.fromId === myId) {
-      box.append(el('div', { class: 'row' },
-        el('span', { class: 'text-muted' }, 'Esperando respuesta...'),
-        el('button', { class: 'btn btn-ghost', onclick: () => act('trade_cancel', { tradeId: t.id }) }, 'Cancelar')
-      ));
+      actions.append(
+        el('span', { class: 'text-muted small waiting-dots' }, `Esperando a ${to.username}`),
+        el('button', { class: 'btn btn-ghost btn-small', onclick: () => act('trade_cancel', { tradeId: t.id }) }, 'Cancelar oferta')
+      );
     }
-    incoming.append(box);
+    body.replaceChildren(
+      el('div', { class: 'trade-compare' },
+        sideView('Entrega', from, t.offer),
+        el('div', { class: 'trade-arrows', 'aria-hidden': 'true' }, '⇄'),
+        sideView('Entrega', to, t.request)
+      ),
+      actions
+    );
     return;
   }
 
+  // Modo proponer
+  title.textContent = 'Proponer intercambio';
   const mine = me();
-  if (!isMyTurn() || state.turn.stage === 'buy') {
-    form.append(el('span', { class: 'text-muted small' }, 'Puedes proponer intercambios durante tu turno.'));
-    return;
-  }
-
   const others = state.players.filter(p => !p.bankrupt && p.id !== myId);
   if (!others.find(p => p.id === tradeDraft.toId)) tradeDraft = { ...emptyDraft(), toId: others[0] ? others[0].id : '' };
   const target = playerById(tradeDraft.toId);
-  if (!target) return;
+  if (!mine || !target) { body.replaceChildren(el('p', { class: 'text-muted' }, 'No hay con quién intercambiar.')); return; }
 
-  const select = el('select', { onchange: (ev) => { tradeDraft = { ...emptyDraft(), toId: ev.target.value }; render(); } },
-    others.map(p => el('option', { value: p.id, selected: p.id === tradeDraft.toId }, p.username)));
+  const targets = el('div', { class: 'trade-targets' }, others.map(p =>
+    el('button', {
+      type: 'button', class: 'trade-target', 'aria-pressed': String(p.id === tradeDraft.toId), '--player-color': p.color,
+      onclick: () => { tradeDraft = { ...emptyDraft(), toId: p.id }; buildTradeWindow(); }
+    }, tokenOf(p.skin, 'sm', p.color), el('span', {}, p.username), el('small', {}, money(p.money)))
+  ));
 
-  const column = (title, owner, side) => {
-    const checks = ownedBy(owner.id).filter(isTradeable).map(s =>
-      el('label', {},
-        el('input', {
-          type: 'checkbox', checked: side.properties.has(s.id),
-          onchange: (ev) => { ev.target.checked ? side.properties.add(s.id) : side.properties.delete(s.id); }
-        }),
-        s.name)
-    );
-    return el('div', { class: 'trade-col' },
-      el('strong', {}, title),
-      el('label', {}, 'Dinero'),
-      el('input', { type: 'number', min: 0, max: owner.money, step: 10, value: side.money,
-        oninput: (ev) => { side.money = Math.max(0, Math.floor(Number(ev.target.value) || 0)); } }),
-      owner.jailCards ? el('label', {}, 'Cartas de salida',
+  const column = (heading, owner, side) => {
+    const props = ownedBy(owner.id).filter(isTradeable);
+    return el('div', { class: 'trade-col', '--player-color': owner.color },
+      el('div', { class: 'trade-col-title' }, heading),
+      el('label', { class: 'trade-money' }, 'Dinero',
+        el('input', { type: 'number', min: 0, max: owner.money, step: 10, value: side.money,
+          oninput: (ev) => { side.money = Math.max(0, Math.min(owner.money, Math.floor(Number(ev.target.value) || 0))); } })),
+      owner.jailCards ? el('label', { class: 'trade-money' }, 'Cartas de salida',
         el('input', { type: 'number', min: 0, max: owner.jailCards, value: side.jailCards,
-          oninput: (ev) => { side.jailCards = Math.max(0, Math.floor(Number(ev.target.value) || 0)); } })) : '',
-      el('div', { class: 'checks' }, checks.length ? checks : el('span', { class: 'text-muted' }, 'Sin propiedades intercambiables'))
+          oninput: (ev) => { side.jailCards = Math.max(0, Math.min(owner.jailCards, Math.floor(Number(ev.target.value) || 0))); } })) : '',
+      el('div', { class: 'checks' }, props.length
+        ? props.map(s => el('label', { class: 'check-prop', '--group-color': s.type === 'property' ? config.groups[s.group].color : '#64748b' },
+            el('input', { type: 'checkbox', checked: side.properties.has(s.id),
+              onchange: (ev) => { if (ev.target.checked) side.properties.add(s.id); else side.properties.delete(s.id); } }),
+            el('span', {}, s.name)))
+        : el('span', { class: 'text-muted small' }, 'Sin propiedades intercambiables'))
     );
   };
 
-  form.append(
-    el('label', {}, 'Proponer a'), select,
-    el('div', { class: 'trade-cols' }, column('Ofreces', mine, tradeDraft.offer), column(`Pides a ${target.username}`, target, tradeDraft.request)),
-    el('button', { class: 'btn btn-small', type: 'button', onclick: () => {
-      const side = s => ({ money: s.money, properties: [...s.properties], jailCards: s.jailCards });
-      act('trade_propose', { toId: tradeDraft.toId, offer: side(tradeDraft.offer), request: side(tradeDraft.request) });
-      tradeDraft = emptyDraft();
-    } }, 'Proponer intercambio')
+  body.replaceChildren(
+    el('div', { class: 'trade-label' }, 'Con quién'),
+    targets,
+    el('div', { class: 'trade-cols' },
+      column('Tú ofreces', mine, tradeDraft.offer),
+      column(`Pides a ${target.username}`, target, tradeDraft.request)),
+    el('div', { class: 'trade-actions' },
+      el('button', { class: 'btn', type: 'button', onclick: () => {
+        const side = s => ({ money: s.money, properties: [...s.properties], jailCards: s.jailCards });
+        act('trade_propose', { toId: tradeDraft.toId, offer: side(tradeDraft.offer), request: side(tradeDraft.request) });
+        tradeDraft = emptyDraft();
+      } }, 'Enviar oferta'),
+      el('button', { class: 'btn btn-ghost', type: 'button', onclick: closeTradeWindow }, 'Cerrar')
+    )
   );
 }
+
+function renderTrade() {
+  const summary = $('trade-summary');
+  const t = state.phase === 'playing' ? state.trade : null;
+
+  // Panel lateral: resumen + botón para abrir la ventana
+  if (t) {
+    const from = playerById(t.fromId), to = playerById(t.toId);
+    const mineInvolved = t.fromId === myId || t.toId === myId;
+    summary.replaceChildren(
+      el('div', {}, el('strong', {}, from.username), ' ⇄ ', el('strong', {}, to.username), ': oferta pendiente'),
+      mineInvolved ? el('button', { class: 'btn btn-small', type: 'button', onclick: () => openTradeWindow('offer') }, 'Ver oferta') : ''
+    );
+  } else if (canPropose()) {
+    summary.replaceChildren(el('button', { class: 'btn btn-small', type: 'button', onclick: () => openTradeWindow('propose') }, '⇄ Proponer intercambio'));
+  } else {
+    summary.replaceChildren(el('span', { class: 'text-muted' },
+      state.phase === 'playing' ? 'Puedes proponer intercambios durante tu turno.' : 'Sin intercambios.'));
+  }
+
+  // Ventana flotante
+  const involved = t && (t.fromId === myId || t.toId === myId);
+  if (involved && t.id !== tradeWin.dismissedTradeId && !(tradeWin.open && tradeWin.mode === 'offer' && tradeWin.tradeId === t.id)) {
+    openTradeWindow('offer'); // llega una oferta nueva (o la acabo de enviar)
+    return;
+  }
+  if (!tradeWin.open) return;
+  if (tradeWin.mode === 'offer' && !t) { closeTradeWindow(); return; }
+  if (tradeWin.mode === 'propose' && !canPropose()) { closeTradeWindow(); return; }
+  // No reconstruir mientras escribe en la ventana (perdería el foco)
+  if (!$('trade-window').contains(document.activeElement)) buildTradeWindow();
+}
+
+// Arrastrar la ventana flotante desde su barra
+(function makeDraggable() {
+  const win = $('trade-window');
+  const bar = $('trade-win-bar');
+  let drag = null;
+  bar.addEventListener('pointerdown', (ev) => {
+    if (ev.target.closest('button')) return;
+    const r = win.getBoundingClientRect();
+    drag = { dx: ev.clientX - r.left, dy: ev.clientY - r.top };
+    bar.setPointerCapture(ev.pointerId);
+    win.classList.add('dragging');
+  });
+  bar.addEventListener('pointermove', (ev) => {
+    if (!drag) return;
+    const x = Math.min(Math.max(0, ev.clientX - drag.dx), window.innerWidth - win.offsetWidth);
+    const y = Math.min(Math.max(0, ev.clientY - drag.dy), window.innerHeight - 48);
+    tradeWin.pos = { x, y };
+    Object.assign(win.style, { left: `${x}px`, top: `${y}px`, right: 'auto', bottom: 'auto' });
+  });
+  const end = () => { drag = null; win.classList.remove('dragging'); };
+  bar.addEventListener('pointerup', end);
+  bar.addEventListener('pointercancel', end);
+  $('trade-win-close').addEventListener('click', () => {
+    if (tradeWin.mode === 'offer') tradeWin.dismissedTradeId = tradeWin.tradeId;
+    closeTradeWindow();
+  });
+})();
+
+// ── Eventos de la partida → sonidos (según la temática de quien actúa) ───────
+let seenLog = null;   // claves de las entradas del registro ya procesadas
+let clockOffset = 0;  // serverNow - Date.now() (para las cuentas regresivas)
+
+const LOG_SOUNDS = [
+  [/ compró /, 'buy'],
+  [/ construyó /, 'build'],
+  [/ de renta a | pagó su deuda| paga la multa| pagó .* sale del calabozo/, 'pay'],
+  [/ pasa por Salida| se lleva el Fondo/, 'collect'],
+  [/ toma Tarjeta /, 'card'],
+  [/ va al calabozo| dobles seguidos/, 'jail'],
+  [/ aceptó el intercambio /, 'tradeOk'],
+  [/ propone un intercambio a /, 'trade'],
+  [/^⏰ Se acabó el tiempo de /, 'timeout'],
+  [/ no se reconectó a tiempo| quebró| quedó eliminado| se rinde/, 'expel']
+];
+
+function playerFromText(text) {
+  const clean = text.replace(/^[^\p{L}\p{N}]+/u, '');
+  return state.players
+    .filter(p => clean.startsWith(`${p.username} `) || text.includes(`tiempo de ${p.username}`))
+    .sort((x, y) => y.username.length - x.username.length)[0] || null;
+}
+
+function processEvents() {
+  const keys = state.log.map(l => `${l.t}|${l.text}`);
+  if (seenLog === null) { seenLog = new Set(keys); return; } // primera carga: sin sonidos
+  const fresh = state.log.filter((l, i) => !seenLog.has(keys[i]));
+  seenLog = new Set(keys);
+
+  for (const entry of fresh) {
+    const text = entry.text;
+    if (text.includes(' sacó ') && !text.includes('dobles seguidos')) {
+      const p = playerFromText(text);
+      Sound.play('roll', p && p.themeId);
+      continue;
+    }
+    const turnMatch = /^Turno de (.+)$/.exec(text);
+    if (turnMatch) {
+      const p = state.players.find(x => x.username === turnMatch[1]);
+      if (p && p.id === myId) Sound.play('turn', p.themeId);
+      continue;
+    }
+    if (/gana la partida/.test(text)) continue; // lo toca la ventana de fin de partida
+    const rule = LOG_SOUNDS.find(([re]) => re.test(text));
+    if (!rule) continue;
+    let p = playerFromText(text);
+    if (rule[1] === 'trade') {
+      // La oferta suena con la temática de quien la recibe, y solo para los implicados
+      const target = state.players.find(x => text.endsWith(` a ${x.username}`));
+      if (!p || !target || (p.id !== myId && target.id !== myId)) continue;
+      p = target;
+    }
+    const play = () => Sound.play(rule[1], p ? p.themeId : null);
+    const anim = p && tokenAnim.get(p.id);
+    if (anim && anim.busy) (anim.after = anim.after || []).push(play);
+    else play();
+  }
+}
+
+// ── Temporizadores: turno (1:30) y reconexión (30 s) ─────────────────────────
+const serverNow = () => Date.now() + clockOffset;
+let lastTickSecond = null;
+
+function fmtClock(ms) {
+  const sec = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
+
+function updateTimers() {
+  if (!state || !config) return;
+  const box = $('turn-timer');
+  const t = state.phase === 'playing' ? state.turn : null;
+  if (!t || !t.deadline) {
+    box.hidden = true;
+  } else {
+    const total = (config.rules && config.rules.turnTimeoutMs) || 90000;
+    const left = t.deadline - serverNow();
+    const pct = Math.max(0, Math.min(100, (left / total) * 100));
+    box.hidden = false;
+    $('turn-timer-text').textContent = fmtClock(left);
+    $('turn-timer-fill').style.width = `${pct}%`;
+    box.dataset.level = left <= 10000 ? 'danger' : left <= 30000 ? 'warn' : 'ok';
+    const current = playerById(t.playerId);
+    if (current) box.style.setProperty('--timer-color', current.color);
+    // Últimos 10 s de MI turno: tic por segundo
+    const sec = Math.ceil(left / 1000);
+    if (t.playerId === myId && sec <= 10 && sec > 0 && sec !== lastTickSecond) {
+      lastTickSecond = sec;
+      Sound.play('tick');
+    }
+  }
+
+  // Cuenta regresiva de reconexión en la lista de jugadores
+  const grace = (config.rules && config.rules.reconnectGraceMs) || 30000;
+  for (const node of document.querySelectorAll('.dc-count')) {
+    const left = Number(node.dataset.since) + grace - serverNow();
+    node.textContent = left > 0
+      ? `desconectado · ${Math.ceil(left / 1000)} s para volver`
+      : 'desconectado · saliendo de la partida…';
+  }
+}
+setInterval(updateTimers, 250);
+
+// ── Logros: aviso cuando se desbloquea una ficha nueva ───────────────────────
+function achievementKey() { return `unlocked_skins:${currentUsername}`; }
+
+function checkAchievements() {
+  if (!config || !progress) return;
+  const skins = config.themes.flatMap(t => t.skins.map(sk => ({ ...sk, themeId: t.id, themeName: t.name })));
+  const unlocked = skins.filter(sk => !sk.starter && sk.unlock && isUnlocked(sk));
+  let known = null;
+  try { known = JSON.parse(localStorage.getItem(achievementKey()) || 'null'); } catch { known = null; }
+  const ids = unlocked.map(sk => sk.id);
+  try { localStorage.setItem(achievementKey(), JSON.stringify(ids)); } catch { /* sin storage */ }
+  if (!Array.isArray(known)) return; // primera vez en este navegador: solo se guarda
+  unlocked.filter(sk => !known.includes(sk.id)).forEach((sk, k) => setTimeout(() => showAchievement(sk), k * 1600));
+}
+
+function showAchievement(skin) {
+  const rarity = (config.rarities && config.rarities[skin.rarity]) || null;
+  const RARITY_COLOR = { common: '#cbd5e1', rare: '#5b9bd5', epic: '#a78bfa', legendary: '#f2c14e' };
+  const color = RARITY_COLOR[skin.rarity] || '#f2c14e';
+  const card = el('div', { class: 'achievement', role: 'status', '--rarity-color': color },
+    el('div', { class: 'achievement-glow', 'aria-hidden': 'true' }),
+    tokenOf(skin, 'lg', color),
+    el('div', { class: 'achievement-text' },
+      el('div', { class: 'achievement-kicker' }, '🏅 ¡Logro desbloqueado!'),
+      el('div', { class: 'achievement-title' }, skin.name),
+      el('div', { class: 'achievement-sub' },
+        [rarity ? rarity.label : skin.rarity, skin.themeName].filter(Boolean).join(' · ')),
+      skin.unlock && skin.unlock.text ? el('div', { class: 'achievement-sub' }, skin.unlock.text) : ''
+    ),
+    el('button', { class: 'achievement-close', type: 'button', 'aria-label': 'Cerrar', onclick: () => dismiss() }, '✕')
+  );
+  const dismiss = () => { card.classList.add('leaving'); setTimeout(() => card.remove(), 400); };
+  $('achievements').append(card);
+  Sound.play('achievement', skin.themeId);
+  setTimeout(dismiss, 7000);
+}
+
+// ── Fin de la partida: ventana con el ganador ────────────────────────────────
+let endShownFor = null;
+
+function endKey() {
+  const start = state.log.find(l => l.text.startsWith('¡Comienza la partida!'));
+  return `${ROOM_ID}|${state.winnerId}|${start ? start.t : ''}`;
+}
+
+function renderEndModal() {
+  const modal = $('end-modal');
+  if (state.phase !== 'finished') { modal.hidden = true; endShownFor = null; return; }
+  const key = endKey();
+  if (endShownFor === key) return;
+  endShownFor = key;
+  let dismissed = false;
+  try { dismissed = sessionStorage.getItem('end_dismissed') === key; } catch { /* sin storage */ }
+  if (dismissed) return;
+
+  const winner = state.winnerId ? playerById(state.winnerId) : null;
+  const theme = winner && config.themes.find(t => t.id === winner.themeId);
+  $('end-token').replaceChildren(winner ? tokenOf(winner.skin, 'xl', winner.color) : '');
+  $('end-title').textContent = winner ? `¡${winner.username} gana la partida!` : 'Partida terminada';
+  $('end-title').style.color = winner ? winner.color : '';
+  $('end-sub').textContent = winner
+    ? (winner.id === myId ? '¡Felicidades, eres el último en pie!' : `Victoria para ${theme ? theme.name : 'su temática'}.`)
+    : 'No quedó ningún jugador en pie.';
+
+  const ranking = [...state.players].sort((x, y) =>
+    (y.id === state.winnerId) - (x.id === state.winnerId) || (x.bankrupt - y.bankrupt) || (y.money - x.money));
+  $('end-ranking').replaceChildren(...ranking.map((p, i) => el('li', { class: p.id === state.winnerId ? 'is-winner' : '', '--player-color': p.color },
+    el('span', { class: 'rank' }, i === 0 && p.id === state.winnerId ? '🏆' : `${i + 1}.`),
+    tokenOf(p.skin, 'sm', p.color),
+    el('span', { class: 'rname' }, p.username, p.id === myId ? ' (tú)' : ''),
+    el('span', { class: 'rmeta' }, p.bankrupt ? 'eliminado' : money(p.money))
+  )));
+
+  const close = () => {
+    modal.hidden = true;
+    try { sessionStorage.setItem('end_dismissed', key); } catch { /* sin storage */ }
+  };
+  const actions = [
+    el('a', { class: 'btn btn-ghost', href: 'lobby.html' }, 'Volver al lobby'),
+    el('button', { class: 'btn btn-secondary', type: 'button', onclick: close }, 'Ver tablero')
+  ];
+  if (state.hostId === myId) actions.push(el('button', { class: 'btn btn-success', type: 'button', onclick: () => { close(); act('restart'); } }, 'Nueva partida'));
+  $('end-actions').replaceChildren(...actions);
+
+  modal.hidden = false;
+  closeTradeWindow();
+  if (winner) setTimeout(() => Sound.play('win', winner.themeId), 300);
+}
+
+// ── Botón de sonido ──────────────────────────────────────────────────────────
+function syncSoundBtn() {
+  const b = $('sound-btn');
+  const on = !Sound.isMuted();
+  b.textContent = on ? '🔊' : '🔇';
+  b.setAttribute('aria-pressed', String(on));
+  b.title = on ? 'Silenciar sonidos' : 'Activar sonidos';
+}
+$('sound-btn').addEventListener('click', () => { Sound.setMuted(!Sound.isMuted()); syncSoundBtn(); });
+syncSoundBtn();
 
 // ── Registro ─────────────────────────────────────────────────────────────────
 function renderLog() {
@@ -792,6 +1128,9 @@ function render() {
   renderMyProps();
   renderTrade();
   renderLog();
+  processEvents();
+  updateTimers();
+  renderEndModal();
 }
 
 $('join-btn').addEventListener('click', () => act('join', { themeId: selectedTheme, skinId: selectedSkin }));
@@ -804,6 +1143,7 @@ $('room-name').textContent = ROOM_ID;
 
 async function loadProgress() {
   try { progress = await Net.fetchProgress(originalToken); } catch { progress = null; }
+  checkAchievements();
   render();
 }
 
@@ -815,11 +1155,13 @@ function onMessage(msg) {
       break;
     case 'game_config':
       config = msg.data;
+      checkAchievements();
       buildBoard();
       render();
       break;
     case 'game_state':
       state = msg.data;
+      if (state.serverNow) clockOffset = state.serverNow - Date.now();
       // Si estábamos en la sala de espera y se cayó nuestro coordinador, el
       // asiento se liberó: al reconectar volvemos a unirnos con la misma ficha.
       if (state.phase === 'lobby') {

@@ -25,7 +25,7 @@ const express = require('express');
 const cors = require('cors');
 const { WebSocketServer, WebSocket } = require('ws');
 const jwt = require('jsonwebtoken');
-const { MonopolyGame, GameError } = require('./game/monopoly');
+const { MonopolyGame, GameError, RECONNECT_GRACE_MS } = require('./game/monopoly');
 const { findTheme, findSkin, starterSkin, isUnlocked } = require('./game/themes');
 
 const { values: args, positionals } = parseArgs({
@@ -77,8 +77,8 @@ const TICK_RATE     = 20;                                        // Hz
 const TICK_MS       = 1000 / TICK_RATE;
 
 // ── Salas de juego ────────────────────────────────────────────────────────────
-// Si el jugador en turno se desconecta, su turno se salta tras este tiempo.
-const DISCONNECT_GRACE_MS = Number(process.env.DISCONNECT_GRACE_MS || 30000);
+// Un jugador desconectado tiene RECONNECT_GRACE_MS (30 s) para volver; si no,
+// queda fuera de la partida. El tiempo por turno (90 s) vive en el motor.
 // Una sala en curso o terminada sin nadie conectado se libera tras este tiempo.
 const ROOM_ABANDON_MS     = Number(process.env.ROOM_ABANDON_MS || 90000);
 
@@ -123,7 +123,8 @@ const rooms = new Map(ROOMS.map(r => [r.id, {
   ...r,
   game: new MonopolyGame(),
   writer: COORDINATOR_ID,
-  skipTimer: null,
+  turnTimer: null,
+  kickTimers: [],
   abandonTimer: null
 }]));
 const reportedMatches = new Set();
@@ -550,7 +551,7 @@ function applyRemoteRoom(msg) {
   for (const [userId, c] of clients) {
     if (c.view !== 'board' || c.roomId !== room.id) continue;
     const gp = room.game.getPlayer(userId);
-    if (gp && !gp.connected) { gp.connected = true; changed = true; }
+    if (gp && !gp.connected) { room.game.setConnected(userId, true); changed = true; }
   }
   if (changed) {
     room.game.version++;
@@ -571,7 +572,8 @@ function onRoomChanged(room) {
 }
 
 function roomState(room) {
-  return { ...room.game.toJSON(), room: { id: room.id, name: room.name } };
+  // serverNow permite al cliente corregir la diferencia de reloj en las cuentas regresivas
+  return { ...room.game.toJSON(), room: { id: room.id, name: room.name }, serverNow: Date.now() };
 }
 
 function roomStatus(game) {
@@ -626,22 +628,30 @@ function scheduleAllRoomTimers() {
 }
 
 function scheduleRoomTimers(room) {
-  if (room.skipTimer) { clearTimeout(room.skipTimer); room.skipTimer = null; }
+  if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
+  for (const t of room.kickTimers || []) clearTimeout(t);
+  room.kickTimers = [];
   if (room.abandonTimer) { clearTimeout(room.abandonTimer); room.abandonTimer = null; }
   if (!isLeader()) return;
   const g = room.game;
 
-  // Saltar el turno del jugador desconectado tras el periodo de gracia.
   if (g.phase === 'playing' && g.turn) {
-    const current = g.current();
-    if (current && !current.connected) {
-      const turnId = current.id;
-      const version = g.version;
-      room.skipTimer = setTimeout(() => {
-        room.skipTimer = null;
-        if (g.version !== version) return;
-        if (g.skipDisconnected(turnId)) { g.version++; commitRoom(room); }
-      }, DISCONNECT_GRACE_MS);
+    // Tiempo del turno: al vencer se pasa al siguiente jugador.
+    const turnId = g.turn.playerId;
+    const deadline = g.turn.deadline || Date.now();
+    room.turnTimer = setTimeout(() => {
+      room.turnTimer = null;
+      if (!g.turn || g.turn.playerId !== turnId || g.turn.deadline !== deadline) return;
+      if (g.timeoutTurn(turnId)) { g.version++; commitRoom(room); }
+    }, Math.max(0, deadline - Date.now()) + 50);
+
+    // Jugadores desconectados: 30 s para volver o quedan fuera.
+    for (const p of g.players) {
+      if (p.bankrupt || p.connected) continue;
+      const since = p.disconnectedAt || Date.now();
+      room.kickTimers.push(setTimeout(() => {
+        if (g.expelDisconnected(p.id, RECONNECT_GRACE_MS)) { g.version++; commitRoom(room); }
+      }, Math.max(0, since + RECONNECT_GRACE_MS - Date.now()) + 50));
     }
   }
 

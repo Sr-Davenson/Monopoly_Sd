@@ -19,6 +19,10 @@ class GameError extends Error {}
 
 const PLAYER_COLORS = ['#f43f5e', '#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#06b6d4'];
 const LOG_LIMIT = 40;
+// Tiempo máximo por turno: al vencer, el turno pasa al siguiente jugador.
+const TURN_TIMEOUT_MS    = Number(process.env.TURN_TIMEOUT_MS || 90 * 1000);
+// Un jugador desconectado tiene este tiempo para volver antes de quedar fuera.
+const RECONNECT_GRACE_MS = Number(process.env.DISCONNECT_GRACE_MS || 30 * 1000);
 
 // rng.int(min, maxExclusive) — inyectable para pruebas
 const defaultRng = { int: (min, max) => crypto.randomInt(min, max) };
@@ -181,6 +185,7 @@ class MonopolyGame {
       jailCards: [],
       bankrupt: false,
       connected: true,
+      disconnectedAt: null,
       stats: { bought: 0, built: 0 }   // para las misiones de desbloqueo
     });
     if (!this.hostId) this.hostId = id;
@@ -219,7 +224,7 @@ class MonopolyGame {
     this.version = version;            // la versión nunca retrocede (replicación)
     for (const k of keep) {
       this.join(k.id, k.username, k.themeId, k.skinId);
-      this.getPlayer(k.id).connected = k.connected;
+      this.setConnected(k.id, k.connected);
     }
     this.hostId = host;
   }
@@ -233,7 +238,8 @@ class MonopolyGame {
       doubles: 0,
       rollAgain: false,
       pendingBuy: null,
-      debt: null              // { total, payees: [{ id, amount }] }
+      debt: null,             // { total, payees: [{ id, amount }] }
+      deadline: Date.now() + TURN_TIMEOUT_MS  // hora límite del turno (epoch ms)
     };
     this.addLog(`Turno de ${p.username}`);
   }
@@ -784,7 +790,38 @@ class MonopolyGame {
   // ── Conexión (lo llama el coordinador) ─────────────────────────────────────
   setConnected(id, connected) {
     const p = this.getPlayer(id);
-    if (p) p.connected = connected;
+    if (!p) return;
+    if (p.connected !== connected || (!connected && !p.disconnectedAt)) {
+      p.disconnectedAt = connected ? null : Date.now();
+    }
+    p.connected = connected;
+  }
+
+  // Se acabó el tiempo del turno: se pasa al siguiente jugador.
+  // Si tenía una compra pendiente se rechaza; si tenía una deuda sin pagar, quiebra.
+  timeoutTurn(id) {
+    if (this.phase !== 'playing' || !this.turn || this.turn.playerId !== String(id)) return false;
+    if (Date.now() < this.turn.deadline) return false;
+    const p = this.current();
+    this.addLog(`⏰ Se acabó el tiempo de ${p.username}`);
+    if (this.turn.debt) {
+      this.eliminate(p, null);
+    } else {
+      this.turn.pendingBuy = null;
+      this.nextTurn();
+    }
+    return true;
+  }
+
+  // Lleva desconectado más de la gracia permitida: queda fuera de la partida.
+  expelDisconnected(id, graceMs) {
+    if (this.phase !== 'playing') return false;
+    const p = this.getPlayer(id);
+    if (!p || p.bankrupt || p.connected || !p.disconnectedAt) return false;
+    if (Date.now() - p.disconnectedAt < graceMs) return false;
+    this.addLog(`🔌 ${p.username} no se reconectó a tiempo y sale de la partida`);
+    this.eliminate(p, null);
+    return true;
   }
 
   // Salta el turno de un jugador desconectado
@@ -849,7 +886,8 @@ class MonopolyGame {
         jailTurns: p.jailTurns,
         jailCards: p.jailCards.length,
         bankrupt: p.bankrupt,
-        connected: p.connected
+        connected: p.connected,
+        disconnectedAt: p.connected ? null : (p.disconnectedAt || null)
       })),
       properties: this.properties,
       pot: this.pot,
@@ -933,9 +971,13 @@ class MonopolyGame {
         serviceMultipliers: eco.SERVICE_MULTIPLIERS,
         minPlayers: eco.MIN_PLAYERS,
         maxPlayers: eco.MAX_PLAYERS
+      },
+      rules: {
+        turnTimeoutMs: TURN_TIMEOUT_MS,
+        reconnectGraceMs: RECONNECT_GRACE_MS
       }
     };
   }
 }
 
-module.exports = { MonopolyGame, GameError };
+module.exports = { MonopolyGame, GameError, TURN_TIMEOUT_MS, RECONNECT_GRACE_MS };
