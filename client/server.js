@@ -11,7 +11,6 @@ const app = express();
 app.use(cors());
 
 // Expone las configuraciones al frontend de forma dinámica.
-// (Taller 6: no se expone ningún coordinador; el cliente se lo pide al auth.)
 app.get('/config.js', (req, res) => {
   res.type('application/javascript');
   res.send(
@@ -22,11 +21,22 @@ app.get('/config.js', (req, res) => {
   );
 });
 
-app.use(express.static(__dirname));
+// Bloquear acceso a archivos de configuración y paquetes
+app.get(['/package.json', '/package-lock.json', '/.env', '/.env.example'], (req, res) => {
+  res.redirect('/login.html');
+});
 
+// La ruta raíz '/' SIEMPRE entrega login.html
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'login.html'));
 });
+
+app.get('/index.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'login.html'));
+});
+
+// Servir archivos estáticos restantes (css, js, html, imágenes)
+app.use(express.static(__dirname));
 
 app.listen(PORT, () => {
   console.log(`Cliente Web corriendo en http://localhost:${PORT}`);
