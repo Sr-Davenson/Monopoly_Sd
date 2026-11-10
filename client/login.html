@@ -1,15 +1,36 @@
-{
-  "name": "client",
-  "version": "1.0.0",
-  "description": "Cliente Web para Login/Registro y Lobby en tiempo real",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
-  },
-  "dependencies": {
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.21.1"
-  }
-}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Monopoly SD — Acceso de Jugadores</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="config.js"></script>
+  <!-- Google Identity Services SDK (Opción A) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>Monopoly SD — Identidad y Sesiones</h1>
+      <p>Regístrate, inicia sesión o accede con Google para entrar al Lobby</p>
+    </header>
+
+    <div id="global-alert" class="alert"></div>
+
+    <div class="grid-2">
+      <!-- Formulario de Login Local -->
+      <section class="card">
+        <h2>Iniciar Sesión</h2>
+        <form id="login-form">
+          <div class="form-group">
+            <label for="login-username">Usuario</label>
+            <input type="text" id="login-username" placeholder="Ej: alice" required autocomplete="username" />
+          </div>
+          <div class="form-group">
+            <label for="login-password">Contraseña</label>
+            <input type="password" id="login-password" placeholder="••••••••" required autocomplete="current-password" />
+          </div>
+          <button type="submit" class="btn">Entrar al Lobby</button>
+        </form>
+      </section>
