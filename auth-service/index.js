@@ -47,17 +47,47 @@ db.exec(`
   );
 `);
 
+// Taller 6: progreso de cada usuario para las misiones de desbloqueo de fichas
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_stats (
+    user_id            INTEGER PRIMARY KEY REFERENCES users(id),
+    games_played       INTEGER NOT NULL DEFAULT 0,
+    games_won          INTEGER NOT NULL DEFAULT 0,
+    properties_bought  INTEGER NOT NULL DEFAULT 0,
+    buildings_built    INTEGER NOT NULL DEFAULT 0
+  );
+  -- Evita contar dos veces la misma partida si se reporta más de una vez
+  CREATE TABLE IF NOT EXISTS matches (
+    match_id     TEXT PRIMARY KEY,
+    room_id      TEXT,
+    reported_by  TEXT,
+    finished_at  TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
 const stmts = {
   insertLocal:    db.prepare("INSERT INTO users (username, provider, password_hash) VALUES (?, 'local', ?)"),
   insertGoogle:   db.prepare("INSERT INTO users (username, provider, google_sub, email) VALUES (?, 'google', ?, ?)"),
   findByUsername: db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)'),
   findByGoogle:   db.prepare('SELECT * FROM users WHERE google_sub = ?'),
+  findById:       db.prepare('SELECT id FROM users WHERE id = ?'),
+  getStats:       db.prepare('SELECT * FROM user_stats WHERE user_id = ?'),
+  insertMatch:    db.prepare('INSERT OR IGNORE INTO matches (match_id, room_id, reported_by) VALUES (?, ?, ?)'),
+  addStats:       db.prepare(`
+    INSERT INTO user_stats (user_id, games_played, games_won, properties_bought, buildings_built)
+    VALUES (@userId, 1, @won, @bought, @built)
+    ON CONFLICT(user_id) DO UPDATE SET
+      games_played      = games_played + 1,
+      games_won         = games_won + @won,
+      properties_bought = properties_bought + @bought,
+      buildings_built   = buildings_built + @built
+  `)
 };
 
 // ── App Express ───────────────────────────────────────────────────────────────
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '4kb' }));
+app.use(express.json({ limit: '16kb' }));
 
 // Manejo de JSON malformado
 app.use((err, req, res, next) => {
@@ -245,7 +275,190 @@ app.post('/auth/google', async (req, res) => {
   }
 });
 
+// ═════════════════════════════════════════════════════════════════════════════
+// TALLER 6 — SERVICIO DE DIRECTORIO DE COORDINADORES
+//
+// Los coordinadores se anuncian con POST /heartbeat cada 2 s. Si uno no lo hace
+// durante HEARTBEAT_TTL_MS (6 s = 3 ciclos) se considera muerto y se descarta.
+// Los clientes preguntan a cuál conectarse con GET /coordinator (el menos
+// cargado) y los coordinadores descubren a sus pares con GET /peers.
+// ═════════════════════════════════════════════════════════════════════════════
+const HEARTBEAT_TTL_MS = Number(process.env.HEARTBEAT_TTL_MS || 6000);
+const COORD_ID_RE      = /^[a-zA-Z0-9_.-]{1,64}$/;
+
+// Map<coordinatorId, { coordinatorId, publicUrl, peerUrl, connectedPlayers, uptime, lastSeen }>
+const coordinators = new Map();
+
+function isWsUrl(u) {
+  if (typeof u !== 'string' || u.length > 512) return false;
+  try {
+    const parsed = new URL(u);
+    return parsed.protocol === 'ws:' || parsed.protocol === 'wss:';
+  } catch { return false; }
+}
+
+// Descarta los coordinadores que dejaron de mandar heartbeat
+function sweepCoordinators() {
+  const now = Date.now();
+  for (const [id, c] of coordinators) {
+    if (now - c.lastSeen > HEARTBEAT_TTL_MS) {
+      coordinators.delete(id);
+      console.log(`[DIRECTORY] ${id} descartado: sin heartbeat hace ${now - c.lastSeen} ms`);
+    }
+  }
+}
+setInterval(sweepCoordinators, 1000).unref();
+
+function aliveCoordinators() {
+  sweepCoordinators();
+  return Array.from(coordinators.values());
+}
+
+// ── POST /heartbeat ───────────────────────────────────────────────────────────
+app.post('/heartbeat', (req, res) => {
+  const { coordinatorId, publicUrl, peerUrl, connectedPlayers, uptime } = req.body || {};
+
+  if (typeof coordinatorId !== 'string' || !COORD_ID_RE.test(coordinatorId)) {
+    return res.status(400).json({ error: 'coordinatorId inválido' });
+  }
+  if (!isWsUrl(publicUrl) || !isWsUrl(peerUrl)) {
+    return res.status(400).json({ error: 'publicUrl y peerUrl deben ser URLs ws:// o wss://' });
+  }
+  const players = Number(connectedPlayers);
+  if (!Number.isInteger(players) || players < 0) {
+    return res.status(400).json({ error: 'connectedPlayers debe ser un entero >= 0' });
+  }
+
+  const isNew = !coordinators.has(coordinatorId);
+  coordinators.set(coordinatorId, {
+    coordinatorId,
+    publicUrl,
+    peerUrl,
+    connectedPlayers: players,
+    uptime: Number.isFinite(Number(uptime)) ? Number(uptime) : 0,
+    lastSeen: Date.now()
+  });
+  if (isNew) console.log(`[DIRECTORY] Coordinador registrado: ${coordinatorId} (${publicUrl}, peer ${peerUrl})`);
+
+  return res.status(200).json({ ok: true });
+});
+
+// ── GET /coordinator ──────────────────────────────────────────────────────────
+// Client-side load balancing: devuelve el coordinador vivo con menos jugadores.
+// Empate → el primero que se encuentre. Ninguno vivo → 503.
+// Opcional: ?exclude=coord-a para que un cliente que acaba de perder la conexión
+// no vuelva al mismo coordinador (si es el único vivo, se ignora el filtro).
+app.get('/coordinator', (req, res) => {
+  const alive = aliveCoordinators();
+  if (alive.length === 0) {
+    return res.status(503).json({ error: 'no_coordinators_available' });
+  }
+
+  const exclude = typeof req.query.exclude === 'string' ? req.query.exclude : null;
+  const candidates = exclude && alive.some(c => c.coordinatorId !== exclude)
+    ? alive.filter(c => c.coordinatorId !== exclude)
+    : alive;
+
+  let best = candidates[0];
+  for (const c of candidates) {
+    if (c.connectedPlayers < best.connectedPlayers) best = c;
+  }
+
+  // Reserva provisional: si varios clientes piden a la vez, no van todos al
+  // mismo coordinador antes de su siguiente heartbeat (que trae la cifra real).
+  best.connectedPlayers++;
+
+  console.log(`[DIRECTORY] GET /coordinator → ${best.coordinatorId}${exclude ? ` (excluyendo ${exclude})` : ''}`);
+  return res.json({ coordinatorId: best.coordinatorId, publicUrl: best.publicUrl });
+});
+
+// ── GET /peers ────────────────────────────────────────────────────────────────
+// Cada coordinador filtra su propio id de la lista.
+app.get('/peers', (req, res) => {
+  const peers = aliveCoordinators().map(c => ({ coordinatorId: c.coordinatorId, peerUrl: c.peerUrl }));
+  res.json({ peers });
+});
+
+// ── GET /coordinators (debug / UI) ───────────────────────────────────────────
+app.get('/coordinators', (req, res) => {
+  const now = Date.now();
+  res.json({
+    ttlMs: HEARTBEAT_TTL_MS,
+    coordinators: aliveCoordinators().map(c => ({ ...c, lastSeenMsAgo: now - c.lastSeen }))
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TALLER 6 — PROGRESO Y MISIONES (desbloqueo de fichas)
+// ═════════════════════════════════════════════════════════════════════════════
+function statsFor(userId) {
+  const row = stmts.getStats.get(Number(userId));
+  return {
+    gamesPlayed:      row ? row.games_played : 0,
+    gamesWon:         row ? row.games_won : 0,
+    propertiesBought: row ? row.properties_bought : 0,
+    buildingsBuilt:   row ? row.buildings_built : 0
+  };
+}
+
+function bearer(req) {
+  const h = req.headers.authorization || '';
+  return h.startsWith('Bearer ') ? h.slice(7) : null;
+}
+
+// GET /me/progress — lo llama el cliente (y el coordinador en nombre del
+// cliente, reenviando su JWT) para saber qué fichas tiene desbloqueadas.
+app.get('/me/progress', (req, res) => {
+  try {
+    const payload = jwt.verify(bearer(req) || '', JWT_SECRET);
+    if (!payload.userId || payload.role) throw new Error('no es un token de usuario');
+    return res.json({ userId: String(payload.userId), stats: statsFor(payload.userId) });
+  } catch {
+    return res.status(401).json({ error: 'invalid_token' });
+  }
+});
+
+// POST /internal/match-result — lo llama el coordinador cuando termina una
+// partida. Se autentica con un JWT de servicio { role: 'coordinator' } firmado
+// con el mismo JWT_SECRET (un usuario no puede fabricarlo).
+app.post('/internal/match-result', (req, res) => {
+  let service;
+  try {
+    service = jwt.verify(bearer(req) || '', JWT_SECRET);
+    if (service.role !== 'coordinator') throw new Error('rol inválido');
+  } catch {
+    return res.status(401).json({ error: 'invalid_service_token' });
+  }
+
+  const { matchId, roomId, players } = req.body || {};
+  if (typeof matchId !== 'string' || !matchId || matchId.length > 64 ||
+      !Array.isArray(players) || players.length > 6) {
+    return res.status(400).json({ error: 'resultado inválido' });
+  }
+
+  const clamp = (n) => Math.max(0, Math.min(1000, Math.floor(Number(n) || 0)));
+  const record = db.transaction(() => {
+    const inserted = stmts.insertMatch.run(matchId, String(roomId || ''), String(service.coordinatorId || ''));
+    if (inserted.changes === 0) return false; // ya estaba reportada
+    for (const p of players) {
+      if (!p || !stmts.findById.get(Number(p.userId))) continue;
+      stmts.addStats.run({
+        userId: Number(p.userId),
+        won: p.won ? 1 : 0,
+        bought: clamp(p.propertiesBought),
+        built: clamp(p.buildingsBuilt)
+      });
+    }
+    return true;
+  });
+
+  const counted = record();
+  console.log(`[AUTH] Partida ${matchId} (${roomId}) reportada por ${service.coordinatorId}: ${counted ? 'registrada' : 'duplicada, ignorada'}`);
+  return res.json({ ok: true, counted });
+});
+
 // ── Arranque ──────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`[AUTH] Servicio corriendo en http://localhost:${PORT} (JWT expira en: ${JWT_EXPIRES_IN})`);
+  console.log(`[DIRECTORY] Directorio de coordinadores activo (TTL de heartbeat: ${HEARTBEAT_TTL_MS} ms)`);
 });
