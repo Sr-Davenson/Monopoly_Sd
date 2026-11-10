@@ -3,36 +3,47 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Monopoly SD — Tablero</title>
+  <title>Cuatro Mundos — Tablero</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700&family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@500;700;900&display=swap" />
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="game.css" />
   <script src="config.js"></script>
+  <script src="tokens.js"></script>
+  <script src="net.js"></script>
 </head>
 <body class="game-body">
   <header class="game-header">
     <div class="game-header-left">
-      <strong class="game-title">Monopoly SD</strong>
-      <span id="conn-status" class="conn-pill" data-state="connecting">Conectando...</span>
+      <a href="lobby.html" class="game-title" title="Volver al lobby">Cuatro Mundos</a>
+      <span class="room-chip" id="room-name">Sala</span>
+      <span id="conn-status" class="pill conn-status" data-state="connecting"><span class="status-dot"></span><span id="conn-text">Conectando...</span></span>
+      <span class="pill coord" title="Coordinador asignado por el auth-service">Coordinador: <strong id="coord-id">—</strong></span>
     </div>
     <div class="game-header-right">
+      <span id="me-token"></span>
       <span>Jugador: <strong id="me-name">...</strong></span>
       <span id="me-money" class="money-pill" hidden></span>
-      <a href="lobby.html" class="btn btn-small btn-ghost">Lobby</a>
+      <a href="lobby.html" class="btn btn-small btn-ghost">← Lobby</a>
     </div>
   </header>
+  <div id="lost-banner" class="lost-banner" role="status" hidden></div>
 
-  <!-- ── Sala de espera: elección de temática (solo al inicio) ─────────────── -->
+  <!-- ── Sala de espera: temática y ficha (solo antes de iniciar) ──────────── -->
   <section id="waiting-room" class="waiting-room" hidden>
     <div class="card">
-      <h2>Elige tu temática inicial</h2>
-      <p class="text-muted small">Tu ficha inicial depende de la temática. Solo se escoge antes de empezar.</p>
+      <h2><span id="waiting-title">Sala de espera</span><span class="badge" id="waiting-count">0/6</span></h2>
+      <p class="text-muted small">1) Escoge la temática con la que juegas. 2) Escoge tu ficha: la inicial siempre está disponible y las demás se desbloquean con misiones. Puedes cambiarlas hasta que empiece la partida.</p>
       <div id="theme-grid" class="theme-grid"></div>
+      <h3 class="mt skins-title" id="skins-title" hidden>Tu ficha</h3>
+      <div id="skin-grid" class="skin-grid"></div>
       <div class="waiting-actions">
         <button id="join-btn" class="btn" disabled>Unirme</button>
         <button id="leave-btn" class="btn btn-ghost" hidden>Salir de la sala</button>
         <button id="start-btn" class="btn btn-success" hidden>Iniciar partida</button>
       </div>
-      <h3 class="mt">En la sala <span id="waiting-count" class="badge">0</span></h3>
+      <h3 class="mt">En la sala</h3>
       <ul id="waiting-list" class="waiting-list"></ul>
     </div>
   </section>
@@ -42,7 +53,13 @@
     <div class="board-wrap">
       <div id="board" class="board">
         <div class="board-center">
-          <div class="center-title">[Nombre del juego]</div>
+          <div class="center-logo">
+            <span class="center-kicker" id="center-room">Sala</span>
+            <div class="center-title">Cuatro Mundos</div>
+            <div class="tagline center-tagline">
+              <span class="t-pirate">Mares</span><span class="sep">·</span><span class="t-fantasy">Hechizos</span><span class="sep">·</span><span class="t-viking">Runas</span><span class="sep">·</span><span class="t-letters">Letras</span>
+            </div>
+          </div>
           <div id="turn-info" class="turn-info"></div>
           <div class="dice-row">
             <div id="die-1" class="die">–</div>
@@ -84,7 +101,7 @@
     </aside>
   </main>
 
-  <div id="toast" class="toast" hidden></div>
+  <div id="toast" class="toast" role="status" hidden></div>
 
   <script src="game.js"></script>
 </body>

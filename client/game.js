@@ -9,20 +9,25 @@
 
 const originalToken   = localStorage.getItem('token');
 const currentUsername = localStorage.getItem('username') || 'Jugador';
-const defaultConfig   = window.APP_CONFIG || { COORDINATOR_WS: 'ws://localhost:5000' };
-const COORDINATOR_WS  = (defaultConfig.COORDINATOR_WS).replace(/\/+$/, '');
+const ROOM_ID         = new URLSearchParams(location.search).get('sala') || 'sala-1';
 
-let ws = null;
+let conn = null;            // conexión con el coordinador (net.js)
 let config = null;          // tablero, temáticas, economía (estático)
-let state = null;           // estado de la partida (lo manda el servidor)
+let state = null;           // estado de la partida de ESTA sala (lo manda el servidor)
 let myId = null;
+let progress = null;        // estadísticas del usuario (misiones)
 let selectedTheme = null;
+let selectedSkin = null;
 let selectedSpace = null;
 let lastRollT = 0;
 let lastCardSeq = 0;
-let redirecting = false;
-let intentionalClose = false;
+let leaving = false;
+let recoverUntil = 0;       // ventana tras perder el coordinador para recuperar el asiento
+let rejoinTried = -1;       // versión del estado en la que ya se intentó volver a unirse
+let lastSeat = null;        // temática/ficha con la que estábamos en la sala de espera
 let tradeDraft = emptyDraft();
+
+const WORLD_COLOR = { david: 'var(--pirate)', jossef: 'var(--fantasy)', sebastian: 'var(--viking)', santiago: 'var(--letters)' };
 
 const $ = (id) => document.getElementById(id);
 
@@ -60,8 +65,9 @@ function toast(text, kind = 'error') {
 }
 
 function act(action, data = {}) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return toast('Sin conexión con el coordinador');
-  ws.send(JSON.stringify({ type: 'game_action', data: { action, ...data } }));
+  if (!conn || !conn.send({ type: 'game_action', data: { action, ...data } })) {
+    toast('Sin conexión con el coordinador');
+  }
 }
 
 // Botón con confirmación en dos pasos (el visor no permite confirm())
@@ -81,21 +87,18 @@ function confirmButton(label, confirmLabel, cls, onConfirm) {
   return b;
 }
 
-function goToLogin(message, keepSession = false) {
-  if (redirecting) return;
-  redirecting = true;
-  if (!keepSession) {
-    localStorage.removeItem('token');
-    localStorage.removeItem('username');
-  }
-  if (message) sessionStorage.setItem('session_message', message);
-  window.location.replace('login.html');
+function setConn(stateName, text) {
+  $('conn-status').dataset.state = stateName;
+  $('conn-text').textContent = text;
 }
 
-function setConn(stateName, text) {
-  const c = $('conn-status');
-  c.dataset.state = stateName;
-  c.textContent = text;
+function tokenOf(skin, size, color) {
+  return Tokens.node(skin, size, color);
+}
+
+function isUnlocked(skin) {
+  if (skin.starter || !skin.unlock) return true;
+  return !!progress && Number(progress[skin.unlock.stat] || 0) >= skin.unlock.count;
 }
 
 // ── Consultas sobre el estado ────────────────────────────────────────────────
@@ -130,8 +133,8 @@ function gridPos(i) {
 }
 
 const SPACE_ICONS = {
-  start: '➜', jail: '▦', rest: '☕', go_to_jail: '⚠',
-  card_general: '?', card_special: '★', donation: '♥', transport: '⇄', service: '⚡'
+  start: '⚑', jail: '⛓', rest: '🍺', go_to_jail: '⚔',
+  card_general: '📜', card_special: '✶', donation: '♥', transport: '⇄', service: '⚡'
 };
 
 const TYPE_LABELS = {
@@ -146,7 +149,7 @@ function buildBoard() {
   const center = board.querySelector('.board-center');
 
   for (const m of config.members) {
-    center.append(el('div', { class: `section-label s${m.side}`, '--section-color': m.color }, `${m.name} · ${m.sectionName}`));
+    center.append(el('div', { class: `section-label s${m.side}`, '--section-color': m.color }, `${m.world} · ${m.sectionName}`));
   }
 
   for (const s of config.spaces) {
@@ -179,8 +182,12 @@ function renderBoard() {
     if (owner) cell.style.setProperty('--owner-color', owner.color);
 
     const parts = [];
-    if (s.type === 'property') parts.push(el('div', { class: 'strip', '--group-color': config.groups[s.group].color }));
-    else parts.push(el('div', { class: 'icon' }, SPACE_ICONS[s.type] || ''));
+    if (s.type === 'property') {
+      parts.push(el('div', { class: 'strip', '--group-color': config.groups[s.group].color }));
+      if (s.icon) parts.push(el('div', { class: 'sicon', 'aria-hidden': 'true' }, s.icon));
+    } else {
+      parts.push(el('div', { class: 'sicon', 'aria-hidden': 'true' }, s.icon || SPACE_ICONS[s.type] || ''));
+    }
     parts.push(el('div', { class: 'name' }, s.name));
 
     if (prop && prop.level > 0) {
@@ -193,11 +200,10 @@ function renderBoard() {
     const tokens = el('div', { class: 'tokens' });
     for (const p of state.players) {
       if (p.bankrupt || p.position !== s.id) continue;
-      tokens.append(el('span', {
-        class: `token ${p.id === turnId ? 'current' : ''}`,
-        '--player-color': p.color,
-        title: `${p.username}${p.inJail ? ' (en la cárcel)' : ''}`
-      }, p.skin.icon));
+      const t = tokenOf(p.skin, '', p.color);
+      if (p.id === turnId) t.classList.add('current');
+      t.title = `${p.username} — ${p.skin.name}${p.inJail ? ' (en el calabozo)' : ''}`;
+      tokens.append(t);
     }
     if (s.price && !owner && !corner) parts.push(el('div', { class: 'price' }, money(s.price)));
     else if (s.type === 'donation') parts.push(el('div', { class: 'price' }, money(s.amount)));
@@ -310,7 +316,7 @@ function renderPlayers() {
     const meta = [
       theme ? theme.name : '',
       `${owned} prop.`,
-      p.inJail ? 'en la cárcel' : '',
+      p.inJail ? 'en el calabozo' : '',
       p.jailCards ? `${p.jailCards} carta(s) de salida` : '',
       p.connected ? '' : 'desconectado',
       p.id === state.hostId ? 'anfitrión' : ''
@@ -319,7 +325,7 @@ function renderPlayers() {
       class: `${state.turn && state.turn.playerId === p.id ? 'turn' : ''} ${p.bankrupt ? 'bankrupt' : ''}`,
       '--player-color': p.color
     },
-      el('span', { class: 'token', '--player-color': p.color }, p.skin.icon),
+      tokenOf(p.skin, '', p.color),
       el('div', { class: 'pname' },
         el('div', {}, p.username, p.id === myId ? ' (tú)' : ''),
         el('div', { class: 'pmeta' }, meta)
@@ -331,6 +337,7 @@ function renderPlayers() {
   const mine = me();
   $('me-money').hidden = !mine;
   if (mine) $('me-money').textContent = money(mine.money);
+  $('me-token').replaceChildren(mine ? tokenOf(mine.skin, 'sm', mine.color) : '');
 }
 
 // ── Panel: casilla seleccionada ──────────────────────────────────────────────
@@ -514,31 +521,61 @@ function renderLog() {
 // ── Sala de espera ───────────────────────────────────────────────────────────
 function renderWaitingRoom() {
   const mine = me();
-  if (mine && !selectedTheme) selectedTheme = mine.themeId;
+  if (mine && !selectedTheme) { selectedTheme = mine.themeId; selectedSkin = mine.skin.id; }
 
   $('theme-grid').replaceChildren(...config.themes.map(t => {
     const m = memberById(t.memberId);
-    const starter = t.skins.find(s => s.starter) || t.skins[0];
+    const color = WORLD_COLOR[t.memberId] || m.color;
+    const free = t.skins.filter(isUnlocked).length;
     return el('button', {
       type: 'button',
       class: 'theme-card',
       'aria-pressed': String(selectedTheme === t.id),
-      '--member-color': m.color,
-      onclick: () => { selectedTheme = t.id; render(); }
+      '--member-color': color,
+      onclick: () => {
+        if (selectedTheme !== t.id) selectedSkin = (t.skins.find(s => s.starter) || t.skins[0]).id;
+        selectedTheme = t.id;
+        render();
+      }
     },
-      el('span', { class: 'theme-icon' }, starter.icon),
-      el('span', { class: 'theme-member' }, m.name),
+      el('span', { class: 'theme-member' }, `${m.world} · ${m.name}`),
       el('strong', {}, t.name),
-      el('span', { class: 'small text-muted' }, m.idea),
-      el('span', { class: 'small' }, `Ficha inicial: ${starter.name}`),
-      el('span', { class: 'theme-skins', title: 'Skins desbloqueables con cajas' },
-        t.skins.filter(s => !s.starter).map(s => s.icon).join(' '), ' 🔒')
+      el('span', { class: 'small text-muted' }, t.description),
+      el('span', { class: 'theme-tokens' }, t.skins.map(s => {
+        const n = tokenOf(s, 'sm', isUnlocked(s) ? color : '#4a4356');
+        if (!isUnlocked(s)) n.classList.add('locked');
+        return n;
+      })),
+      el('span', { class: 'small' }, `${free}/${t.skins.length} fichas desbloqueadas`)
     );
   }));
 
+  // Fichas de la temática elegida (las bloqueadas muestran su misión)
+  const theme = config.themes.find(t => t.id === selectedTheme);
+  $('skins-title').hidden = !theme;
+  $('skin-grid').replaceChildren(...(theme ? theme.skins.map(s => {
+    const ok = isUnlocked(s);
+    const color = WORLD_COLOR[theme.memberId];
+    const have = s.unlock && progress ? Math.min(Number(progress[s.unlock.stat] || 0), s.unlock.count) : 0;
+    const node = tokenOf(s, 'xl', ok ? color : '#4a4356');
+    if (!ok) node.classList.add('locked');
+    return el('button', {
+      type: 'button',
+      class: 'skin-option',
+      disabled: !ok,
+      'aria-pressed': String(selectedSkin === s.id),
+      onclick: () => { selectedSkin = s.id; render(); }
+    },
+      node,
+      el('span', { class: 'sname' }, s.name, ok ? '' : ' 🔒'),
+      el('span', { class: 'smission' }, s.starter ? 'Ficha inicial' : ok ? 'Desbloqueada' : `${s.unlock.text} (${have}/${s.unlock.count})`)
+    );
+  }) : []));
+
   const join = $('join-btn');
-  join.disabled = !selectedTheme || (mine && mine.themeId === selectedTheme);
-  join.textContent = mine ? 'Cambiar temática' : 'Unirme';
+  const unchanged = mine && mine.themeId === selectedTheme && mine.skin.id === selectedSkin;
+  join.disabled = !selectedTheme || !selectedSkin || unchanged;
+  join.textContent = mine ? 'Cambiar temática / ficha' : 'Unirme a la partida';
   $('leave-btn').hidden = !mine;
   const start = $('start-btn');
   start.hidden = !(mine && state.hostId === myId);
@@ -546,17 +583,18 @@ function renderWaitingRoom() {
   start.textContent = state.players.length < config.economy.minPlayers
     ? `Iniciar (mínimo ${config.economy.minPlayers} jugadores)` : 'Iniciar partida';
 
-  $('waiting-count').textContent = `${state.players.length}/${config.economy.maxPlayers}`;
+  $('waiting-title').textContent = `${state.room ? state.room.name : 'Sala'} — sala de espera`;
+  $('waiting-count').textContent = `${state.players.length}/${config.economy.maxPlayers} · mínimo ${config.economy.minPlayers}`;
   $('waiting-list').replaceChildren(...(state.players.length
     ? state.players.map(p => {
       const theme = config.themes.find(t => t.id === p.themeId);
       return el('li', {},
-        el('span', { class: 'token', '--player-color': p.color }, p.skin.icon),
+        tokenOf(p.skin, '', p.color),
         el('strong', {}, p.username), p.id === myId ? ' (tú)' : '',
-        el('span', { class: 'text-muted small' }, ` · ${theme.name}`, p.id === state.hostId ? ' · anfitrión' : '')
+        el('span', { class: 'text-muted small' }, ` · ${p.skin.name} · ${theme ? theme.name : ''}`, p.id === state.hostId ? ' · anfitrión 👑' : '')
       );
     })
-    : [el('li', { class: 'text-muted' }, 'Nadie se ha unido todavía.')]));
+    : [el('li', { class: 'text-muted' }, 'Nadie se ha unido todavía. ¡Sé el primero!')]));
 }
 
 // ── Render principal ─────────────────────────────────────────────────────────
@@ -575,73 +613,108 @@ function render() {
   renderLog();
 }
 
-$('join-btn').addEventListener('click', () => act('join', { themeId: selectedTheme }));
-$('leave-btn').addEventListener('click', () => { selectedTheme = null; act('leave'); });
+$('join-btn').addEventListener('click', () => act('join', { themeId: selectedTheme, skinId: selectedSkin }));
+$('leave-btn').addEventListener('click', () => { selectedTheme = null; selectedSkin = null; act('leave'); });
 $('start-btn').addEventListener('click', () => act('start'));
 
-// ── Conexión (mismas capas de seguridad que el lobby) ────────────────────────
+// ── Conexión (Taller 6: GET /coordinator → WS; reconexión a otro coordinador) ─
 $('me-name').textContent = currentUsername;
+$('room-name').textContent = ROOM_ID;
 
-if (!originalToken) {
-  goToLogin('Debes iniciar sesión para acceder al tablero.');
-} else {
-  connect();
+async function loadProgress() {
+  try { progress = await Net.fetchProgress(originalToken); } catch { progress = null; }
+  render();
+}
+
+function onMessage(msg) {
+  switch (msg.type) {
+    case 'welcome':
+      myId = String(msg.you.userId);
+      if (msg.coordinator) $('coord-id').textContent = msg.coordinator.coordinatorId;
+      break;
+    case 'game_config':
+      config = msg.data;
+      buildBoard();
+      render();
+      break;
+    case 'game_state':
+      state = msg.data;
+      // Si estábamos en la sala de espera y se cayó nuestro coordinador, el
+      // asiento se liberó: al reconectar volvemos a unirnos con la misma ficha.
+      if (state.phase === 'lobby') {
+        const mine = me();
+        if (mine) lastSeat = { themeId: mine.themeId, skinId: mine.skin.id };
+        else if (lastSeat && Date.now() < recoverUntil && rejoinTried !== state.version) {
+          rejoinTried = state.version;
+          act('join', lastSeat);
+        }
+      }
+      if (state.room) {
+        $('room-name').textContent = state.room.name;
+        $('center-room').textContent = state.room.name;
+        document.title = `Cuatro Mundos — ${state.room.name}`;
+      }
+      render();
+      break;
+    case 'game_error':
+      toast(msg.data.message);
+      break;
+    case 'progress_changed':
+      loadProgress();
+      break;
+    case 'auth_challenge':
+      conn.send({ type: 'auth_response', data: { token: localStorage.getItem('token') } });
+      break;
+  }
 }
 
 function connect() {
-  setConn('connecting', 'Conectando...');
-  ws = new WebSocket(`${COORDINATOR_WS}/connect?view=board&token=${encodeURIComponent(originalToken)}`);
+  conn = Net.connectCoordinator({
+    token: originalToken,
+    params: { view: 'board', room: ROOM_ID },
+    onStatus(stateName, text, info) {
+      setConn(stateName, stateName === 'connected' && info ? `Conectado a ${info.coordinatorId}` : text);
+      if (info) $('coord-id').textContent = stateName === 'connected' ? info.coordinatorId : '—';
+    },
+    onOpen() {
+      $('lost-banner').hidden = true;
+    },
+    onLost(info) {
+      if (leaving) return;
+      recoverUntil = Date.now() + 15000;
+      const b = $('lost-banner');
+      b.hidden = false;
+      b.textContent = `Se perdió la conexión con ${info.coordinatorId}. Tu partida sigue en los demás coordinadores: pidiendo uno nuevo al auth-service…`;
+    },
+    onMessage,
+    onFatal(code) {
+      if (leaving) return;
+      if (code === 4004) { leaving = true; window.location.replace('lobby.html'); return; }
+      Net.goToLogin(Net.FATAL_MESSAGES[code] || 'La sesión terminó.', code === 4002);
+    }
+  });
 
   // Detección local de manipulación del token
   const poll = setInterval(() => {
     if (localStorage.getItem('token') !== originalToken) {
       clearInterval(poll);
-      intentionalClose = true;
-      ws.close(1000, 'token tampered client-side');
-      goToLogin('Sesión cerrada: se detectó una modificación no autorizada del token de sesión.');
+      leaving = true;
+      conn.close(1000, 'token tampered client-side');
+      Net.goToLogin('Sesión cerrada: se detectó una modificación no autorizada del token de sesión.');
     }
   }, 2000);
+}
 
-  ws.onopen = () => setConn('connected', 'Conectado');
+// Al volver al lobby se cierra la conexión sin intentar reconectar
+window.addEventListener('pagehide', () => { leaving = true; if (conn) conn.close(1000, 'leaving page'); });
 
-  ws.onmessage = (event) => {
-    let msg;
-    try { msg = JSON.parse(event.data); } catch { return; }
-
-    switch (msg.type) {
-      case 'welcome':
-        myId = String(msg.you.userId);
-        break;
-      case 'game_config':
-        config = msg.data;
-        buildBoard();
-        render();
-        break;
-      case 'game_state':
-        state = msg.data;
-        render();
-        break;
-      case 'game_error':
-        toast(msg.data.message);
-        break;
-      case 'auth_challenge':
-        ws.send(JSON.stringify({ type: 'auth_response', data: { token: localStorage.getItem('token') } }));
-        break;
-    }
-  };
-
-  ws.onclose = (event) => {
-    clearInterval(poll);
-    setConn('disconnected', 'Desconectado');
-    if (intentionalClose) return;
-    if (event.code === 4002) return goToLogin('Tu sesión se abrió en otra pestaña.', true);
-    if (event.code === 4001) return goToLogin('Sesión terminada: token inválido o expirado.');
-    if (event.code === 4003) return goToLogin('Sesión cerrada: se detectó una modificación no autorizada del token de sesión.');
-    goToLogin('La conexión con el coordinador se cerró inesperadamente.', true);
-  };
+if (!originalToken) {
+  Net.goToLogin('Debes iniciar sesión para acceder al tablero.');
+} else {
+  connect();
+  loadProgress();
 }
 
 // Para la demo de autoridad: `state` es local. Modificarlo desde DevTools solo
 // cambia esta pantalla; el próximo game_state del servidor lo sobrescribe.
 window.getGameState = () => state;
-
