@@ -1,13 +1,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Conexión con los coordinadores (Taller 6).
+// Conexión con los coordinadores.
 //
 // El cliente hace dos pasos antes de jugar:
-//   1. GET {AUTH_URL}/coordinator   → { coordinatorId, publicUrl }  (el menos cargado)
+//   1. GET {AUTH_URL}/coordinator   → { coordinatorId, publicUrl }
+//        · sin parámetros: el coordinador MENOS cargado (balanceo de carga)
+//        · ?prefer=coord-a: ese coordinador si está vivo (anfitrión de una sala)
+//        · ?exclude=coord-b: cualquiera menos el que acaba de fallar
 //   2. WebSocket a {publicUrl}/connect?token=...
 //
 // Si el WebSocket se cae NO se reconecta directo al mismo coordinador: se
-// vuelve a pedir GET /coordinator (con ?exclude=<el que falló>) y se conecta
-// al que diga el auth-service.
+// vuelve a pedir GET /coordinator (con ?exclude=<el que falló>).
+//
+// Cierre 4010 ("host:<id>"): la sala pedida la atiende otro coordinador. El
+// cliente se cambia a ese coordinador automáticamente (onRedirect).
 //
 // Los cierres 4001 (token inválido), 4002 (sesión duplicada), 4003 (token
 // manipulado) y 4004 (sala inválida) son definitivos: no se reintenta.
@@ -17,9 +22,13 @@
   const AUTH_URL = (cfg.AUTH_URL || 'http://localhost:4000').replace(/\/+$/, '');
   const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
   const FATAL_CODES = new Set([4001, 4002, 4003, 4004]);
+  const REDIRECT_CODE = 4010;
 
-  async function requestCoordinator(exclude) {
-    const q = exclude ? `?exclude=${encodeURIComponent(exclude)}` : '';
+  async function requestCoordinator({ exclude, prefer } = {}) {
+    const qs = new URLSearchParams();
+    if (exclude) qs.set('exclude', exclude);
+    if (prefer) qs.set('prefer', prefer);
+    const q = qs.toString() ? `?${qs}` : '';
     const res = await fetch(`${AUTH_URL}/coordinator${q}`, { headers: HEADERS, cache: 'no-store' });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -40,15 +49,17 @@
   }
 
   // opts = {
-  //   token, params: { view, room },
+  //   token, params: { view, room }, prefer: 'coord-a' (opcional),
   //   onStatus(state: 'connecting'|'connected'|'disconnected', text, info),
-  //   onOpen(info), onMessage(msg), onFatal(code, reason), onLost(info)
+  //   onOpen(info), onMessage(msg), onFatal(code, reason), onLost(info),
+  //   onRedirect(fromId, toId)
   // }
   function connectCoordinator(opts) {
     let ws = null;
     let stopped = false;
     let attempt = 0;
     let lastFailed = null;
+    let prefer = opts.prefer || null;
     let current = null;
     let retryTimer = null;
     const status = (state, text) => opts.onStatus && opts.onStatus(state, text, current);
@@ -56,11 +67,13 @@
     async function open() {
       if (stopped) return;
       attempt++;
-      status('connecting', attempt > 1 ? `Pidiendo coordinador al auth (intento ${attempt})…` : 'Pidiendo coordinador…');
+      status('connecting', prefer
+        ? `Cambiando al coordinador ${prefer}…`
+        : attempt > 1 ? `Pidiendo coordinador al auth (intento ${attempt})…` : 'Pidiendo coordinador…');
 
       let info;
       try {
-        info = await requestCoordinator(lastFailed);
+        info = await requestCoordinator({ exclude: lastFailed, prefer });
       } catch (err) {
         status('connecting', err.status === 503
           ? 'No hay coordinadores vivos. Reintentando…'
@@ -69,7 +82,7 @@
       }
       if (stopped) return;
       current = info;
-      console.log(`[NET] GET /coordinator → ${info.coordinatorId} (${info.publicUrl})`);
+      console.log(`[NET] GET /coordinator${prefer ? ` (prefer ${prefer})` : ''} → ${info.coordinatorId} (${info.publicUrl})`);
       status('connecting', `Conectando a ${info.coordinatorId}…`);
 
       const qs = new URLSearchParams({ ...(opts.params || {}), token: opts.token });
@@ -78,6 +91,7 @@
         ws = new WebSocket(`${info.publicUrl.replace(/\/+$/, '')}/connect?${qs}`);
       } catch {
         lastFailed = info.coordinatorId;
+        if (prefer === info.coordinatorId) prefer = null;
         return retry();
       }
 
@@ -101,8 +115,20 @@
           stopped = true;
           return opts.onFatal && opts.onFatal(event.code, event.reason);
         }
+
+        // La sala vive en otro coordinador: cambiarse a él.
+        if (event.code === REDIRECT_CODE && /^host:/.test(event.reason || '')) {
+          const target = event.reason.slice(5);
+          console.log(`[NET] ${info.coordinatorId} indica que la sala está en ${target}: cambiando de coordinador`);
+          prefer = target;
+          lastFailed = null;
+          opts.onRedirect && opts.onRedirect(info.coordinatorId, target);
+          return retry(true);
+        }
+
         // Volver a preguntar al auth, sin repetir el coordinador que falló
         lastFailed = info.coordinatorId;
+        if (prefer === info.coordinatorId) prefer = null;
         console.warn(`[NET] Se perdió ${info.coordinatorId} (código ${event.code}). Pidiendo otro coordinador…`);
         status('disconnected', `Se perdió ${info.coordinatorId}. Buscando otro…`);
         opts.onLost && opts.onLost(info);

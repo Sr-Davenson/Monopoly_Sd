@@ -1,0 +1,15 @@
+.login-intro {
+  max-width: 640px;
+  margin: 0.9rem auto 0;
+  color: var(--text-muted);
+  font-size: 1rem;
+}
+.login-card h2 .emblem { font-size: 1.1rem; opacity: 0.8; }
+.google-card { margin-top: 1.25rem; text-align: center; }
+.google-card p.lead { color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1.1rem; }
+.footer-note { text-align: center; margin-top: 1.5rem; color: var(--text-muted); font-size: 0.82rem; }
+
+.google-card h2.centered { justify-content: center; }
+.google-btn-wrapper { display: flex; justify-content: center; align-items: center; min-height: 48px; }
+.google-status { color: var(--text-muted); font-size: 0.82rem; margin-top: 0.75rem; }
+.modal-overlay[hidden] { display: none; }

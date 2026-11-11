@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cuatro Mundos — Lobby</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700&family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@500;700;900&display=swap" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/lobby.css" />
+  <script src="js/config.js"></script>
+  <script src="js/lib/dom.js"></script>
+  <script src="js/lib/tokens.js"></script>
+  <script src="js/lib/net.js"></script>
+</head>
+<body>
+  <div class="container lobby">
+    <header class="header">
+      <div class="game-logo">
+        <span class="kicker">Monopoly SD · Lobby</span>
+        <h1>Cuatro Mundos</h1>
+        <div class="tagline">
+          <span class="t-pirate">Mares</span><span class="sep">·</span><span class="t-fantasy">Hechizos</span><span class="sep">·</span><span class="t-viking">Runas</span><span class="sep">·</span><span class="t-letters">Letras</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ── Estado de la sesión y del coordinador ──────────────────────────── -->
+    <section class="card status-card">
+      <div class="top-bar">
+        <div class="user-badge">
+          <span id="me-token"></span>
+          <span>Jugador: <strong id="current-username">...</strong></span>
+          <span id="conn-status" class="pill conn-status" data-state="connecting" role="status" aria-live="polite">
+            <span class="status-dot"></span>
+            <span id="conn-status-text">Conectando...</span>
+          </span>
+        </div>
+        <div class="status-right">
+          <span class="pill coord" title="Coordinador asignado por el auth-service (GET /coordinator)">Coordinador: <strong id="coord-id">—</strong></span>
+          <span class="pill" id="mesh-pill" title="Otros coordinadores con los que el tuyo está enlazado">Mesh: <strong id="mesh-peers">—</strong></span>
+          <button id="logout-btn" type="button" class="btn btn-danger">Cerrar sesión</button>
+        </div>
+      </div>
+      <div id="lost-banner" class="lost-banner" role="status" hidden></div>
+    </section>
+
+    <!-- ── Salas ────────────────────────────────────────────────────────────── -->
+    <h2 class="section-title">Salas de juego <small>Cualquier jugador puede crear una sala · se ven desde todos los coordinadores · mínimo 2 y máximo 6 jugadores</small></h2>
+
+    <form id="create-room-form" class="card create-room" autocomplete="off">
+      <div class="create-room-fields">
+        <label class="field">
+          <span>Nombre de la sala</span>
+          <input type="text" id="room-name-input" maxlength="40" minlength="3" placeholder="Ej: La guarida del Kraken" required />
+        </label>
+        <label class="field">
+          <span>Emblema</span>
+          <select id="room-emblem-input"></select>
+        </label>
+        <button type="submit" id="create-room-btn" class="btn">Crear sala</button>
+      </div>
+      <p class="create-room-hint">La sala queda alojada en tu coordinador (<strong id="create-room-coord">—</strong>). Los jugadores de otros coordinadores la verán y, al entrar, se cambiarán a él automáticamente.</p>
+      <p id="create-room-error" class="alert alert-error" role="alert"></p>
+    </form>
+
+    <div id="rooms" class="rooms-grid" aria-live="polite">
+      <p class="text-muted">Conectando con el coordinador...</p>
+    </div>
+
+    <div class="lobby-grid">
+      <!-- ── Plaza (canvas en tiempo real) ────────────────────────────────── -->
+      <section class="card plaza-card">
+        <div class="plaza-head">
+          <h2>Plaza de los Cuatro Mundos</h2>
+          <span class="pill coord" id="tick-info">Tick: 20 Hz · Coordinador: <strong id="tick-coord">—</strong></span>
+        </div>
+
+        <div class="controls">
+          <label>Color <input type="color" id="player-color-picker" value="#d9b45a" title="Color del borde de tu ficha" /></label>
+          <label>Ficha
+            <select id="player-art-picker" title="Fichas que ya desbloqueaste"></select>
+          </label>
+          <label>Ánimo
+            <select id="player-mood-picker" title="Emoji sobre tu ficha">
+              <option value="">Ninguno</option>
+              <option value="⚓">⚓ Ancla</option>
+              <option value="🔮">🔮 Hechizo</option>
+              <option value="🪓">🪓 Hacha</option>
+              <option value="📖">📖 Libro</option>
+              <option value="👑">👑 Corona</option>
+              <option value="🔥">🔥 Fuego</option>
+              <option value="⭐">⭐ Estrella</option>
+            </select>
+          </label>
+        </div>
+
+        <p class="hint">Muévete con <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> o las flechas. Ves a todos los jugadores de todos los coordinadores; la etiqueta bajo cada ficha indica a cuál está conectado.</p>
+
+        <div class="canvas-frame">
+          <canvas id="game-canvas" width="800" height="600" aria-label="Plaza: posición de los jugadores en tiempo real"></canvas>
+        </div>
+      </section>
+
+      <!-- ── Jugadores en línea ───────────────────────────────────────────── -->
+      <section class="card online-card">
+        <h2><span>Jugadores en línea</span><span class="badge" id="players-count">0 conectados</span></h2>
+        <ul id="players-list" class="players-list">
+          <li class="player-item"><span class="text-muted">Conectando con el coordinador...</span></li>
+        </ul>
+      </section>
+    </div>
+
+    <!-- ── Colección y misiones ─────────────────────────────────────────────── -->
+    <h2 class="section-title">Colección de fichas <small>Cada temática trae una ficha inicial; las demás se desbloquean con misiones</small></h2>
+    <section class="card">
+      <div id="stats" class="stats-row"></div>
+      <div id="collection" class="collection"><p class="text-muted">Cargando temáticas...</p></div>
+    </section>
+  </div>
+
+  <script src="js/pages/lobby.js"></script>
+</body>
+</html>

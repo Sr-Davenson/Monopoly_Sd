@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Panel del coordinador</title>
+  <link rel="stylesheet" href="panel.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="who">
+      <span class="kicker">Cuatro Mundos · Coordinador</span>
+      <h1 id="self-id">…</h1>
+    </div>
+    <div class="chips">
+      <span class="chip" id="chip-directory" data-state="pending">Directorio: …</span>
+      <span class="chip" id="chip-ngrok" data-state="pending">ngrok: …</span>
+      <span class="chip" id="chip-leader" data-state="pending">Rol: …</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card self">
+      <h2>Este coordinador</h2>
+      <dl class="facts">
+        <dt>URL pública (clientes)</dt><dd><code id="self-public">…</code></dd>
+        <dt>URL de pares (mesh)</dt><dd><code id="self-peer">…</code></dd>
+        <dt>Auth-service</dt><dd><code id="self-auth">…</code></dd>
+        <dt>Puerto local</dt><dd id="self-port">…</dd>
+        <dt>Jugadores conectados aquí</dt><dd id="self-players">…</dd>
+        <dt>Activo desde hace</dt><dd id="self-uptime">…</dd>
+      </dl>
+      <div id="warning" class="warning" hidden></div>
+    </section>
+
+    <section class="card network">
+      <div class="card-head">
+        <h2>Coordinadores en la red</h2>
+        <span class="muted" id="network-count"></span>
+      </div>
+      <p class="muted small">Lista que entrega el auth-service (<code>GET /coordinators</code>) y estado del enlace mesh de este coordinador con cada uno.</p>
+      <div id="coordinators" class="coord-grid"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Salas</h2>
+        <span class="muted" id="rooms-count"></span>
+      </div>
+      <table class="table">
+        <thead><tr><th>Sala</th><th>Anfitrión</th><th>Estado</th><th>Jugadores</th><th>Obs.</th></tr></thead>
+        <tbody id="rooms"></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Jugadores en la mesh</h2>
+        <span class="muted" id="players-count"></span>
+      </div>
+      <table class="table">
+        <thead><tr><th>Jugador</th><th>Coordinador</th><th>Dónde</th></tr></thead>
+        <tbody id="players"></tbody>
+      </table>
+    </section>
+
+    <section class="card wide">
+      <div class="card-head">
+        <h2>Eventos recientes</h2>
+        <span class="muted small" id="replication"></span>
+      </div>
+      <ol id="events" class="events"></ol>
+    </section>
+  </main>
+
+  <script src="panel.js"></script>
+</body>
+</html>

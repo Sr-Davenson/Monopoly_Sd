@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cuatro Mundos — Acceso</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700&family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@500;700;900&display=swap" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/login.css" />
+  <script src="js/config.js"></script>
+  <script src="js/lib/tokens.js"></script>
+  <!-- Google Identity Services SDK (Opción A) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="game-logo">
+        <span class="kicker">Monopoly SD · Sistemas Distribuidos</span>
+        <h1>Cuatro Mundos</h1>
+        <div class="tagline">
+          <span class="t-pirate">Mares</span><span class="sep">·</span><span class="t-fantasy">Hechizos</span><span class="sep">·</span><span class="t-viking">Runas</span><span class="sep">·</span><span class="t-letters">Letras</span>
+        </div>
+      </div>
+      <p class="login-intro">Piratas, magos, vikingos y personajes de libro compiten por el mismo tablero. Inicia sesión para escoger tu sala y tu ficha.</p>
+      <div id="worlds-row" class="worlds-row" aria-label="Los cuatro mundos"></div>
+    </header>
+
+    <div id="global-alert" class="alert" role="alert"></div>
+
+    <div class="grid-2">
+      <!-- Formulario de Login Local -->
+      <section class="card login-card">
+        <h2>Iniciar sesión <span class="emblem" aria-hidden="true">⚓</span></h2>
+        <form id="login-form">
+          <div class="form-group">
+            <label for="login-username">Usuario</label>
+            <input type="text" id="login-username" placeholder="Ej: alice" required autocomplete="username" />
+          </div>
+          <div class="form-group">
+            <label for="login-password">Contraseña</label>
+            <input type="password" id="login-password" placeholder="••••••••" required autocomplete="current-password" />
+          </div>
+          <button type="submit" class="btn">Entrar al lobby</button>
+        </form>
+      </section>
+
+      <!-- Formulario de Registro Local -->
+      <section class="card login-card">
+        <h2>Crear cuenta <span class="emblem" aria-hidden="true">📜</span></h2>
+        <form id="register-form">
+          <div class="form-group">
+            <label for="reg-username">Nuevo Usuario</label>
+            <input type="text" id="reg-username" placeholder="Mínimo 3 caracteres" required autocomplete="username" />
+          </div>
+          <div class="form-group">
+            <label for="reg-password">Contraseña</label>
+            <input type="password" id="reg-password" placeholder="Mínimo 4 caracteres" required autocomplete="new-password" />
+          </div>
+          <button type="submit" class="btn">Registrarse</button>
+        </form>
+      </section>
+    </div>
+
+    <!-- Sección de Autenticación con Google (Opción A) -->
+    <section class="card google-card">
+      <h2 class="centered">Acceso con Google</h2>
+      <p class="lead">Inicia sesión o regístrate con tu cuenta de Google</p>
+
+      <!-- Contenedor del botón oficial de Google -->
+      <div id="g_id_onload"
+           data-client_id="786041305351-sj20hhmusecqdqtg9qactcnjqcq3o3ta.apps.googleusercontent.com"
+           data-context="signin"
+           data-ux_mode="popup"
+           data-callback="handleGoogleCredentialResponse"
+           data-auto_prompt="false">
+      </div>
+
+      <div class="google-btn-wrapper">
+        <div id="google-btn-wrapper" class="g_id_signin"
+             data-type="standard"
+             data-shape="rectangular"
+             data-theme="outline"
+             data-text="signin_with"
+             data-size="large"
+             data-logo_alignment="left"
+             data-width="280">
+        </div>
+      </div>
+      <p id="google-status-msg" class="google-status"></p>
+    </section>
+
+    <!-- Modal para primer login con Google (seleccionar username) -->
+    <div id="google-username-modal" class="modal-overlay" hidden>
+      <div class="modal-content">
+        <h3>¡Bienvenido a Cuatro Mundos!</h3>
+        <p>Es tu primer inicio con Google. Elige tu nombre de usuario para el juego:</p>
+        <div id="modal-alert" class="alert"></div>
+        <form id="google-username-form">
+          <div class="form-group">
+            <label for="google-username-input">Nombre de usuario</label>
+            <input type="text" id="google-username-input" placeholder="Ej: bob_google" required autocomplete="username" />
+          </div>
+          <div class="modal-actions">
+            <button type="submit" class="btn">Confirmar y Entrar</button>
+            <button type="button" id="cancel-google-modal-btn" class="btn btn-secondary">Cancelar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <p class="footer-note">Al entrar, el servicio de autenticación te asigna el coordinador menos cargado.</p>
+
+  <script src="js/pages/login.js"></script>
+</body>
+</html>

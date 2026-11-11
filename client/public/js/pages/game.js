@@ -9,7 +9,10 @@
 
 const originalToken   = localStorage.getItem('token');
 const currentUsername = localStorage.getItem('username') || 'Jugador';
-const ROOM_ID         = new URLSearchParams(location.search).get('sala') || 'sala-1';
+const PARAMS          = new URLSearchParams(location.search);
+const ROOM_ID         = PARAMS.get('sala');
+// Coordinador anfitrión de la sala: el cliente se cambia a él al entrar.
+const ROOM_HOST       = PARAMS.get('coord');
 
 let conn = null;            // conexión con el coordinador (net.js)
 let config = null;          // tablero, temáticas, economía (estático)
@@ -29,25 +32,8 @@ let tradeDraft = emptyDraft();
 
 const WORLD_COLOR = { david: 'var(--pirate)', jossef: 'var(--fantasy)', sebastian: 'var(--viking)', santiago: 'var(--letters)' };
 
-const $ = (id) => document.getElementById(id);
-
-// ── Utilidades ───────────────────────────────────────────────────────────────
-function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v === undefined || v === null || v === false) continue;
-    if (k === 'class') node.className = v;
-    else if (k === 'style') node.style.cssText = v;
-    else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
-    else if (k.startsWith('--')) node.style.setProperty(k, v);
-    else node.setAttribute(k, v === true ? '' : v);
-  }
-  for (const c of children.flat()) {
-    if (c === null || c === undefined || c === false) continue;
-    node.append(c instanceof Node ? c : document.createTextNode(String(c)));
-  }
-  return node;
-}
+// Utilidades de DOM compartidas (js/lib/dom.js)
+const { $, el } = Dom;
 
 function money(n) {
   const sym = config ? config.economy.currency.symbol : '¤';
@@ -1195,12 +1181,20 @@ function connect() {
   conn = Net.connectCoordinator({
     token: originalToken,
     params: { view: 'board', room: ROOM_ID },
+    prefer: ROOM_HOST,
     onStatus(stateName, text, info) {
       setConn(stateName, stateName === 'connected' && info ? `Conectado a ${info.coordinatorId}` : text);
       if (info) $('coord-id').textContent = stateName === 'connected' ? info.coordinatorId : '—';
     },
     onOpen() {
       $('lost-banner').hidden = true;
+    },
+    onRedirect(from, to) {
+      // La sala vive en otro coordinador: nos cambiamos a él automáticamente.
+      recoverUntil = Date.now() + 15000;
+      const b = $('lost-banner');
+      b.hidden = false;
+      b.textContent = `Esta sala la atiende ${to}. Cambiando de ${from} a ${to}…`;
     },
     onLost(info) {
       if (leaving) return;
@@ -1233,6 +1227,8 @@ window.addEventListener('pagehide', () => { leaving = true; if (conn) conn.close
 
 if (!originalToken) {
   Net.goToLogin('Debes iniciar sesión para acceder al tablero.');
+} else if (!ROOM_ID) {
+  window.location.replace('lobby.html');
 } else {
   connect();
   loadProgress();
