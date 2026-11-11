@@ -21,8 +21,8 @@ let leaving = false;
 const STATUS_LABEL = { vacia: 'Vacía', sin_iniciar: 'Sin iniciar', en_curso: 'En curso', finalizada: 'Finalizada' };
 // Emblemas disponibles al crear una sala (el coordinador valida la lista)
 const ROOM_STYLE = {
-  kraken:    { emoji: '🐙', label: 'Kraken',    color: 'var(--pirate)' },
-  cofre:     { emoji: '💰', label: 'Cofre',     color: 'var(--pirate)' },
+  galaxia:   { emoji: '🌌', label: 'Galaxia',   color: 'var(--galaxy)' },
+  nave:      { emoji: '🚀', label: 'Nave',      color: 'var(--galaxy)' },
   yggdrasil: { emoji: '🌳', label: 'Yggdrasil', color: 'var(--fantasy)' },
   dragon:    { emoji: '🐉', label: 'Dragón',    color: 'var(--fantasy)' },
   drakkar:   { emoji: '⛵', label: 'Drakkar',   color: 'var(--viking)' },
@@ -30,7 +30,7 @@ const ROOM_STYLE = {
   babel:     { emoji: '📚', label: 'Babel',     color: 'var(--letters)' },
   pluma:     { emoji: '🪶', label: 'Pluma',     color: 'var(--letters)' }
 };
-const WORLD_COLOR = { david: 'var(--pirate)', jossef: 'var(--fantasy)', sebastian: 'var(--viking)', santiago: 'var(--letters)' };
+const WORLD_COLOR = { david: 'var(--galaxy)', jossef: 'var(--fantasy)', sebastian: 'var(--viking)', santiago: 'var(--letters)' };
 
 function setConnState(state, text) {
   $('conn-status').dataset.state = state;
@@ -278,7 +278,7 @@ function buildBackground(w, h) {
   const rnd = seeded(42);
   const hw = w / 2, hh = h / 2;
   const quads = [
-    { x: 0,  y: 0,  base: '#0d2633', accent: '#2a6f8f', label: 'Mar de los Corsarios', color: '#e05a47' },
+    { x: 0,  y: 0,  base: '#07070f', accent: '#3a3f6b', label: 'Galaxia Muy Lejana',   color: '#e05a47' },
     { x: hw, y: 0,  base: '#0f2a1f', accent: '#2f8f63', label: 'Reinos Encantados',    color: '#46b98a' },
     { x: 0,  y: hh, base: '#101d30', accent: '#6fa8dc', label: 'Tierras del Norte',    color: '#5b9bd5' },
     { x: hw, y: hh, base: '#261a10', accent: '#8a5e33', label: 'Barrio de las Letras', color: '#c58b4f' }
@@ -294,12 +294,25 @@ function buildBackground(w, h) {
     g.strokeStyle = q.accent + '66';
     g.fillStyle = q.accent + '55';
     g.lineWidth = 1.5;
-    if (i === 0) {        // olas
-      for (let y = q.y + 20; y < q.y + hh; y += 26) {
-        g.beginPath();
-        for (let x = q.x; x <= q.x + hw; x += 8) g.lineTo(x, y + Math.sin((x + y) / 18) * 4);
-        g.stroke();
+    if (i === 0) {        // espacio: estrellas, un planeta con anillo y una estrella de la muerte lejana
+      for (let k = 0; k < 90; k++) {
+        g.fillStyle = rnd() < 0.15 ? '#f2d48acc' : '#ffffff' + (rnd() < 0.5 ? '88' : 'cc');
+        g.beginPath(); g.arc(q.x + rnd() * hw, q.y + rnd() * hh, rnd() * 1.4 + 0.3, 0, Math.PI * 2); g.fill();
       }
+      const px = q.x + hw * 0.72, py = q.y + hh * 0.62;
+      const planet = g.createRadialGradient(px - 14, py - 14, 4, px, py, 46);
+      planet.addColorStop(0, '#e8a35a'); planet.addColorStop(1, '#5a2c14');
+      g.fillStyle = planet;
+      g.beginPath(); g.arc(px, py, 42, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = '#f2d48a88'; g.lineWidth = 2.5;
+      g.beginPath(); g.ellipse(px, py, 68, 13, -0.35, 0, Math.PI * 2); g.stroke();
+      const dx = q.x + hw * 0.24, dy = q.y + hh * 0.42;
+      g.fillStyle = '#8e959e88';
+      g.beginPath(); g.arc(dx, dy, 18, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#4c525a99';
+      g.beginPath(); g.arc(dx - 6, dy - 6, 5, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = '#4c525a99'; g.lineWidth = 1.2;
+      g.beginPath(); g.moveTo(dx - 18, dy + 1); g.quadraticCurveTo(dx, dy + 4, dx + 18, dy + 1); g.stroke();
     } else if (i === 1) { // bosque
       for (let k = 0; k < 26; k++) {
         const x = q.x + rnd() * hw, y = q.y + 20 + rnd() * (hh - 20), s = 8 + rnd() * 10;
@@ -403,7 +416,7 @@ function sendExtras() {
   if (!conn) return;
   const color = $('player-color-picker').value;
   const mood  = $('player-mood-picker').value;
-  const art   = $('player-art-picker').value || 'sombrero_pirata';
+  const art   = $('player-art-picker').value || 'casco_vader';
   try { localStorage.setItem('plazaArt', art); } catch { /* sin almacenamiento */ }
   $('me-token').replaceChildren(Tokens.node({ art }, '', color));
   conn.send({ type: 'extras_update', extras: { color, mood, art } });

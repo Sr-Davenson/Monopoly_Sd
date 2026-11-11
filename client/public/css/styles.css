@@ -1,7 +1,7 @@
 /* ─────────────────────────────────────────────────────────────────────────────
    CUATRO MUNDOS — identidad visual compartida (login, lobby y tablero)
    Tinta nocturna + pergamino + oro, con un color por mundo:
-     Piratas (rojo coral) · Fantasía (esmeralda) · Vikingos (azul hielo) · Literatura (sepia)
+     Star Wars (rojo sable) · Fantasía (esmeralda) · Vikingos (azul hielo) · Literatura (sepia)
    ───────────────────────────────────────────────────────────────────────────── */
 :root {
   --bg: #0f0d14;
@@ -21,7 +21,7 @@
   --danger: #e05a47;
   --warning: #e8a33d;
 
-  --pirate: #e05a47;
+  --galaxy: #e05a47;
   --fantasy: #46b98a;
   --viking: #5b9bd5;
   --letters: #c58b4f;
@@ -50,7 +50,7 @@ body {
   padding: 2rem 1rem 3rem;
   background-color: var(--bg);
   background-image:
-    radial-gradient(60rem 40rem at -10% -10%, color-mix(in srgb, var(--pirate) 16%, transparent), transparent 60%),
+    radial-gradient(60rem 40rem at -10% -10%, color-mix(in srgb, var(--galaxy) 16%, transparent), transparent 60%),
     radial-gradient(60rem 40rem at 110% -10%, color-mix(in srgb, var(--fantasy) 14%, transparent), transparent 60%),
     radial-gradient(60rem 40rem at -10% 110%, color-mix(in srgb, var(--viking) 14%, transparent), transparent 60%),
     radial-gradient(60rem 40rem at 110% 110%, color-mix(in srgb, var(--letters) 16%, transparent), transparent 60%);
@@ -97,7 +97,7 @@ code { font-size: 0.9em; color: var(--gold-2); }
   letter-spacing: 0.18em;
   text-transform: uppercase;
 }
-.tagline .t-pirate  { color: var(--pirate); }
+.tagline .t-galaxy  { color: var(--galaxy); }
 .tagline .t-fantasy { color: var(--fantasy); }
 .tagline .t-viking  { color: var(--viking); }
 .tagline .t-letters { color: var(--letters); }

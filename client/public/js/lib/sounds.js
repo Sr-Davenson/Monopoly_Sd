@@ -2,7 +2,7 @@
 // Sonidos del tablero, sintetizados con Web Audio (sin archivos de audio).
 //
 // Cada temática tiene su propio "instrumento", su escala y su sonido de paso:
-//   tema_david     (Piratas)   → madera que cruje, campana de barco, cañón
+//   tema_david     (Star Wars) → metales épicos, disparos láser, salto al hiperespacio
 //   tema_jossef    (Fantasía)  → destellos de arpa y cristal, glissandos mágicos
 //   tema_sebastian (Vikingos)  → tambor de guerra y cuerno
 //   tema_santiago  (Letras)    → máquina de escribir, campanilla, hoja de papel
@@ -96,27 +96,34 @@
   // step(i): sonido de cada casilla que pisa la ficha
   // special: efectos propios (tarjeta, cárcel)
   const THEMES = {
-    // Piratas: acordeón/concertina, escala dórica, madera y campana de barco
+    // Star Wars: metales de fanfarria (escala menor armónica), láseres y motores
     tema_david: {
-      scale: [62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79],
-      note(m, at, dur, gain = 0.32) {
-        tone({ type: 'sawtooth', freq: hz(m), at, dur, gain: gain * 0.5, attack: 0.03, filter: 1600, q: 2 });
-        tone({ type: 'square', freq: hz(m), at, dur, gain: gain * 0.25, attack: 0.03, filter: 1200, detune: 8 });
+      scale: [55, 57, 58, 60, 62, 63, 66, 67, 69, 70, 72],
+      note(m, at, dur, gain = 0.34) {
+        tone({ type: 'sawtooth', freq: hz(m), at, dur, gain: gain * 0.55, attack: 0.05, filter: 1400, q: 1.5 });
+        tone({ type: 'sawtooth', freq: hz(m - 12), at, dur, gain: gain * 0.3, attack: 0.07, filter: 800, detune: 5 });
       },
       step(i) {
-        const pitch = i % 2 ? 210 : 170;
-        tone({ type: 'triangle', freq: pitch, to: pitch * 0.6, dur: 0.12, gain: 0.5 });
-        noise({ dur: 0.07, gain: 0.25, type: 'lowpass', freq: 900 });
+        // disparo láser corto
+        tone({ type: 'square', freq: i % 2 ? 1500 : 1200, to: 180, dur: 0.12, gain: 0.16, filter: 2600 });
+        tone({ type: 'sine', freq: 900, to: 120, dur: 0.1, gain: 0.25 });
       },
       bell(at = 0) {
-        tone({ type: 'sine', freq: 880, at, dur: 1.2, gain: 0.35 });
-        tone({ type: 'sine', freq: 880 * 2.76, at, dur: 0.6, gain: 0.12 });
-        tone({ type: 'sine', freq: 880 * 5.4, at, dur: 0.3, gain: 0.05 });
+        // blaster doble
+        tone({ type: 'sawtooth', freq: 1800, to: 200, at, dur: 0.18, gain: 0.18, filter: 3000 });
+        tone({ type: 'sawtooth', freq: 1600, to: 180, at: at + 0.12, dur: 0.18, gain: 0.14, filter: 3000 });
       },
-      card() { noise({ dur: 0.5, gain: 0.3, freq: 400, to: 2400, q: 0.8 }); this.note(69, 0.2, 0.25); this.note(74, 0.4, 0.35); },
+      card() {
+        // salto al hiperespacio
+        noise({ dur: 0.7, gain: 0.3, freq: 200, to: 5000, q: 1.2 });
+        tone({ type: 'sawtooth', freq: 80, to: 900, dur: 0.6, gain: 0.18, filter: 1500 });
+        this.note(67, 0.55, 0.3);
+      },
       jail() {
-        noise({ dur: 0.9, gain: 0.7, type: 'lowpass', freq: 600, to: 80 });
-        tone({ type: 'sine', freq: 110, to: 35, dur: 0.8, gain: 0.8 });
+        // rayo tractor: zumbido grave que oscila
+        tone({ type: 'sawtooth', freq: 55, to: 45, dur: 1.1, gain: 0.5, filter: 400, q: 4 });
+        tone({ type: 'sine', freq: 110, to: 70, dur: 1.1, gain: 0.4 });
+        noise({ dur: 1, gain: 0.2, type: 'lowpass', freq: 300 });
       }
     },
 

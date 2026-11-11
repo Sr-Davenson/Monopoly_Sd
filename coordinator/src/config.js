@@ -80,7 +80,7 @@ const config = {
   ROOM_EMPTY_MS:     Number(process.env.ROOM_EMPTY_MS || 60000),    // sala sin nadie (sin iniciar) → se borra
   ROOM_ABANDON_MS:   Number(process.env.ROOM_ABANDON_MS || 90000),  // partida sin nadie conectado → se borra
   ORPHAN_GRACE_MS:   Number(process.env.ORPHAN_GRACE_MS || 4000),   // anfitrión caído → otro adopta la sala
-  ROOM_EMBLEMS:      ['kraken', 'cofre', 'yggdrasil', 'dragon', 'drakkar', 'martillo', 'babel', 'pluma'],
+  ROOM_EMBLEMS:      ['galaxia', 'nave', 'yggdrasil', 'dragon', 'drakkar', 'martillo', 'babel', 'pluma'],
 
   STARTED_AT: Date.now()
 };

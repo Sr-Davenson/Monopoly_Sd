@@ -1,7 +1,7 @@
 // ── Los cuatro mundos con su ficha inicial ────────────────────────────────
 (function renderWorlds() {
   const worlds = [
-    { name: 'Piratas',    sub: 'Mar de los Corsarios', art: 'sombrero_pirata', color: 'var(--pirate)' },
+    { name: 'Star Wars',  sub: 'Galaxia Muy Lejana',   art: 'casco_vader',     color: 'var(--galaxy)' },
     { name: 'Fantasía',   sub: 'Reinos Encantados',    art: 'pocion',          color: 'var(--fantasy)' },
     { name: 'Vikingos',   sub: 'Tierras del Norte',    art: 'casco_vikingo',   color: 'var(--viking)' },
     { name: 'Literatura', sub: 'Barrio de las Letras', art: 'samsa',           color: 'var(--letters)' }

@@ -27,41 +27,41 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const GENERAL_DECK = [
-  { title: '¡Cofre del tesoro desenterrado!',             text: 'Cobra 200.',                          effect: { kind: 'collect', amount: 200 } },
+  { title: '¡Recompensa del Gremio de Cazarrecompensas!', text: 'Cobra 200.',                          effect: { kind: 'collect', amount: 200 } },
   { title: 'El Rey Arturo premia tu lealtad',             text: 'Cobra 100.',                          effect: { kind: 'collect', amount: 100 } },
   { title: 'Botín de un saqueo exitoso',                  text: 'Cobra 100.',                          effect: { kind: 'collect', amount: 100 } },
   { title: 'Regalías de tu primera novela',               text: 'Cobra 50.',                           effect: { kind: 'collect', amount: 50 } },
   { title: 'Un hada deja una moneda bajo tu almohada',    text: 'Cobra 25.',                           effect: { kind: 'collect', amount: 25 } },
   { title: 'Vendes pieles en el mercado de Hedeby',       text: 'Cobra 20.',                           effect: { kind: 'collect', amount: 20 } },
-  { title: 'Un doblón brilla en la arena',                text: 'Cobra 10.',                           effect: { kind: 'collect', amount: 10 } },
+  { title: 'Créditos olvidados en la arena de Tatooine', text: 'Cobra 10.',                           effect: { kind: 'collect', amount: 10 } },
   { title: 'Fiesta del solsticio: todos te traen regalos', text: 'Cada jugador te paga 10.',           effect: { kind: 'collect_each', amount: 10 } },
-  { title: 'Viento a favor: regresas a puerto',           text: 'Avanza hasta Salida.',                effect: { kind: 'move_to', position: 0 } },
+  { title: 'Salto al hiperespacio: vuelves a la base',   text: 'Avanza hasta Salida.',                effect: { kind: 'move_to', position: 0 } },
   { title: 'La ganzúa de Arsène Lupin',                   text: 'Sal del calabozo gratis (guárdala).', effect: { kind: 'jail_free' } },
   { title: 'El grifo cobra peaje',                        text: 'Paga 50.',                            effect: { kind: 'pay', amount: 50 } },
   { title: 'Multa del Gremio de Escribas',                text: 'Paga 100.',                           effect: { kind: 'pay', amount: 100 } },
   { title: 'Ofrenda a los dioses del Norte',              text: 'Dona 50 al Fondo de Donaciones.',     effect: { kind: 'donate', amount: 50 } },
   { title: 'Una colecta para la piedra de Sísifo',        text: 'Dona 100 al Fondo de Donaciones.',    effect: { kind: 'donate', amount: 100 } },
-  { title: 'Tormenta en el puerto',                       text: 'Reparaciones: paga 40 por casa y 115 por hotel.', effect: { kind: 'repairs', perHouse: 40, perHotel: 115 } },
-  { title: '¡Te atrapó la Armada Real!',                  text: 'Ve directo al calabozo.',             effect: { kind: 'go_to_jail' } }
+  { title: 'Bombardeo imperial sobre tu base',           text: 'Reparaciones: paga 40 por casa y 115 por hotel.', effect: { kind: 'repairs', perHouse: 40, perHotel: 115 } },
+  { title: '¡Te atrapó un rayo tractor imperial!',       text: 'Ve directo al calabozo.',             effect: { kind: 'go_to_jail' } }
 ];
 
 const SPECIAL_DECK = [
-  { title: 'El Kraken te arrastra hasta Salida',      text: 'Avanza hasta Salida.',                          effect: { kind: 'move_to', position: 0 } },
+  { title: 'El sarlacc te escupe de vuelta a Salida',  text: 'Avanza hasta Salida.',                          effect: { kind: 'move_to', position: 0 } },
   { title: 'Se abre un portal feérico',               text: 'Avanza hasta el Bosque de Brocelianda.',        effect: { kind: 'move_to', position: 11 } },
   { title: '¡Drakkars a la vista: a saquear!',        text: 'Avanza hasta el Monasterio de Lindisfarne.',    effect: { kind: 'move_to', position: 21 } },
   { title: 'Mariposas amarillas te guían',            text: 'Avanza hasta Macondo.',                         effect: { kind: 'move_to', position: 39 } },
-  { title: 'Barbanegra te recluta',                   text: "Avanza hasta el Galeón Queen Anne's Revenge.",  effect: { kind: 'move_to', position: 5 } },
+  { title: 'Han Solo te lleva a bordo',               text: 'Avanza hasta el Halcón Milenario.',  effect: { kind: 'move_to', position: 5 } },
   { title: 'Sleipnir galopa por ti',                  text: 'Avanza al siguiente transporte. Si tiene dueño, paga el doble.', effect: { kind: 'nearest_transport' } },
   { title: 'La vuelta al mundo en 80 días',           text: 'Avanza al siguiente transporte. Si tiene dueño, paga el doble.', effect: { kind: 'nearest_transport' } },
   { title: 'Amaneces convertido en insecto',          text: 'Retrocede 3 casillas.',                         effect: { kind: 'move_back', steps: 3 } },
   { title: 'Te acusan sin saber de qué (El proceso)', text: 'Ve directo al calabozo.',                       effect: { kind: 'go_to_jail' } },
   { title: 'Pergamino de liberación de Merlín',       text: 'Sal del calabozo gratis (guárdala).',           effect: { kind: 'jail_free' } },
   { title: 'El dragón deja caer parte de su tesoro',  text: 'Cobra 150.',                                    effect: { kind: 'collect', amount: 150 } },
-  { title: 'Un mapa te lleva a un pequeño cofre',     text: 'Cobra 50.',                                     effect: { kind: 'collect', amount: 50 } },
+  { title: 'R2-D2 encuentra un depósito de créditos', text: 'Cobra 50.',                                     effect: { kind: 'collect', amount: 50 } },
   { title: 'Pagas al barquero',                       text: 'Paga 15.',                                      effect: { kind: 'pay', amount: 15 } },
   { title: 'Banquete en el Valhalla: invitas tú',     text: 'Paga 50 a cada jugador.',                       effect: { kind: 'pay_each', amount: 50 } },
   { title: 'Los trolls dañan tus construcciones',     text: 'Reparaciones: paga 25 por casa y 100 por hotel.', effect: { kind: 'repairs', perHouse: 25, perHotel: 100 } },
-  { title: 'Tributo al Cofre de Davy Jones',          text: 'Dona 50 al Fondo de Donaciones.',               effect: { kind: 'donate', amount: 50 } }
+  { title: 'Tributo a Jabba el Hutt',                 text: 'Dona 50 al Fondo de Donaciones.',               effect: { kind: 'donate', amount: 50 } }
 ];
 
 const DECKS = {

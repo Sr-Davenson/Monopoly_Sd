@@ -10,42 +10,80 @@
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
   const ART = {
-    // ── Piratas (David) ──────────────────────────────────────────────────────
-    sombrero_pirata: `
-      <path d="M4 42 Q32 30 60 42 Q56 49 32 47 Q8 49 4 42Z" fill="#2a2730" stroke="#d9b45a" stroke-width="2"/>
-      <path d="M8 40 Q14 16 32 14 Q50 16 56 40 Q46 33 32 35 Q18 33 8 40Z" fill="#1d1b22" stroke="#d9b45a" stroke-width="2"/>
-      <circle cx="32" cy="24" r="5.5" fill="#f3ead7"/>
-      <rect x="29" y="27.5" width="6" height="3.5" rx="1" fill="#f3ead7"/>
-      <circle cx="30" cy="24" r="1.5" fill="#1d1b22"/><circle cx="34" cy="24" r="1.5" fill="#1d1b22"/>
-      <path d="M25 30 L39 36 M39 30 L25 36" stroke="#f3ead7" stroke-width="2.2" stroke-linecap="round"/>`,
+    // ── Star Wars (David) ────────────────────────────────────────────────────
+    casco_vader: `
+      <path d="M32 4 C17 4 11 15 11 28 L9 46 L4 56 L20 58 L26 50 H38 L44 58 L60 56 L55 46 L53 28 C53 15 47 4 32 4Z" fill="#1a1a1f" stroke="#5a5d66" stroke-width="1.6"/>
+      <path d="M32 6 V22" stroke="#34363e" stroke-width="2"/>
+      <path d="M14 26 Q32 19 50 26 L48 30 Q32 24 16 30Z" fill="#2c2d34"/>
+      <path d="M18 30 Q24 28 29 31 L27 37 Q21 37 18 33Z" fill="#3b4a5c" stroke="#7d8a99" stroke-width="1"/>
+      <path d="M46 30 Q40 28 35 31 L37 37 Q43 37 46 33Z" fill="#3b4a5c" stroke="#7d8a99" stroke-width="1"/>
+      <path d="M32 33 L36 38 L35 44 H29 L28 38Z" fill="#2c2d34" stroke="#5a5d66" stroke-width="1"/>
+      <path d="M24 42 L32 54 L40 42" fill="#24252b" stroke="#8a8f99" stroke-width="1.3"/>
+      <path d="M29 46 V51 M32 47 V53 M35 46 V51" stroke="#8a8f99" stroke-width="1"/>
+      <path d="M20 10 Q15 18 15 26" stroke="#ffffff" stroke-opacity="0.2" stroke-width="2.5" fill="none" stroke-linecap="round"/>`,
 
-    mapa_tesoro: `
-      <path d="M8 12 Q14 8 20 12 L56 10 Q60 31 56 52 L20 54 Q14 58 8 54 Q12 32 8 12Z" fill="#ead6a6" stroke="#8b6a3e" stroke-width="2"/>
-      <path d="M20 12 Q16 33 20 54" fill="none" stroke="#c9ad74" stroke-width="1.5"/>
-      <path d="M14 46 q5 -5 10 0 q-5 4 -10 0Z" fill="#7fb07a"/>
-      <path d="M19 44 Q24 30 32 34 Q40 38 43 24" fill="none" stroke="#8b3a2a" stroke-width="2" stroke-dasharray="3 3"/>
-      <path d="M40 16 L49 25 M49 16 L40 25" stroke="#c0392b" stroke-width="3.2" stroke-linecap="round"/>
-      <circle cx="48" cy="44" r="5" fill="none" stroke="#8b6a3e" stroke-width="1.3"/>
-      <path d="M48 37 V51 M41 44 H55" stroke="#8b6a3e" stroke-width="1.3"/>`,
-
-    garfio: `
-      <path d="M32 26 C32 9 51 7 51 21 C51 29 43 31 40 25" fill="none" stroke="#5f6670" stroke-width="7" stroke-linecap="round"/>
-      <path d="M32 26 C32 9 51 7 51 21 C51 29 43 31 40 25" fill="none" stroke="#d3d9e1" stroke-width="4" stroke-linecap="round"/>
-      <rect x="29" y="24" width="6" height="14" fill="#c3cad3" stroke="#5f6670" stroke-width="1.2"/>
-      <rect x="17" y="36" width="30" height="7" rx="2" fill="#d9b45a" stroke="#8a6d27" stroke-width="1.2"/>
-      <path d="M19 43 H45 L41 60 H23Z" fill="#7a4a24" stroke="#4a2c14" stroke-width="2"/>
-      <path d="M26 46 L25 58 M32 46 V58 M38 46 L39 58" stroke="#5e3619" stroke-width="1.3"/>`,
-
-    calavera: `
-      <g stroke-linecap="round">
-        <path d="M11 42 L53 60 M53 42 L11 60" stroke="#8a7f6a" stroke-width="7"/>
-        <path d="M11 42 L53 60 M53 42 L11 60" stroke="#efe5cf" stroke-width="4.5"/>
+    caza_tie: `
+      <g fill="#2b2f36" stroke="#9aa3ad" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M8 3 L14 9 V55 L8 61 L2 55 V9Z"/>
+        <path d="M56 3 L62 9 V55 L56 61 L50 55 V9Z"/>
       </g>
-      <path d="M32 6 C18 6 11 16 11 27 C11 35 16 39 20 41 V48 H44 V41 C48 39 53 35 53 27 C53 16 46 6 32 6Z" fill="#f3ead7" stroke="#8a7f6a" stroke-width="1.6"/>
-      <ellipse cx="24" cy="28" rx="5.2" ry="6" fill="#1c1923"/>
-      <ellipse cx="40" cy="28" rx="5.2" ry="6" fill="#1c1923"/>
-      <path d="M32 33 L29 39 H35Z" fill="#1c1923"/>
-      <path d="M25 43 V48 M29 43 V48 M33 43 V48 M37 43 V48 M41 43 V48" stroke="#8a7f6a" stroke-width="1.3"/>`,
+      <path d="M8 3 V61 M2 9 L14 55 M14 9 L2 55 M56 3 V61 M50 9 L62 55 M62 9 L50 55" stroke="#4b525c" stroke-width="1"/>
+      <rect x="14" y="29" width="8" height="6" fill="#7d858f" stroke="#4b525c" stroke-width="1"/>
+      <rect x="42" y="29" width="8" height="6" fill="#7d858f" stroke="#4b525c" stroke-width="1"/>
+      <circle cx="32" cy="32" r="12" fill="#9aa3ad" stroke="#4b525c" stroke-width="1.6"/>
+      <circle cx="32" cy="32" r="6.5" fill="#1c2026" stroke="#5c636c" stroke-width="1.2"/>
+      <path d="M32 25.5 V38.5 M25.5 32 H38.5 M27.4 27.4 L36.6 36.6 M36.6 27.4 L27.4 36.6" stroke="#5c636c" stroke-width="1"/>
+      <path d="M26 24 Q29 21 33 21" stroke="#ffffff" stroke-opacity="0.35" stroke-width="1.5" fill="none" stroke-linecap="round"/>`,
+
+    casco_rex: `
+      <rect x="9" y="33" width="5" height="11" rx="2" fill="#c9d0d8" stroke="#7d8794" stroke-width="1.2"/>
+      <rect x="50" y="33" width="5" height="11" rx="2" fill="#c9d0d8" stroke="#7d8794" stroke-width="1.2"/>
+      <path d="M32 4 C18 4 12 14 12 27 V44 C12 50 16 56 22 58 H42 C48 56 52 50 52 44 V27 C52 14 46 4 32 4Z" fill="#eef1f4" stroke="#7d8794" stroke-width="1.6"/>
+      <path d="M19 10 Q15 18 15 25 H21 Q21 16 25 8Z" fill="#3a6fc4"/>
+      <path d="M45 10 Q49 18 49 25 H43 Q43 16 39 8Z" fill="#3a6fc4"/>
+      <path d="M29 5 H35 V24 H29Z" fill="#3a6fc4"/>
+      <path d="M15 26 H49 V33 H36.5 V47 H27.5 V33 H15Z" fill="#1c2026"/>
+      <path d="M22 51 H42 M26 54.5 H38" stroke="#7d8794" stroke-width="1.4" stroke-linecap="round"/>
+      <path d="M17 40 V46 M19.5 40 V46 M22 40 V46" stroke="#3a6fc4" stroke-width="1.2"/>`,
+
+    caza_xwing: `
+      <path d="M8 8 L3 3 M56 8 L61 3 M8 56 L3 61 M56 56 L61 61" stroke="#9aa3ad" stroke-width="2.2" stroke-linecap="round"/>
+      <g fill="#dfe3e8" stroke="#6c7480" stroke-width="1.4" stroke-linejoin="round">
+        <path d="M27 27 L8 6 L5 10 L25 31Z"/>
+        <path d="M37 27 L56 6 L59 10 L39 31Z"/>
+        <path d="M27 37 L8 58 L5 54 L25 33Z"/>
+        <path d="M37 37 L56 58 L59 54 L39 33Z"/>
+      </g>
+      <path d="M22 24 L12 13 M42 24 L52 13 M22 40 L12 51 M42 40 L52 51" stroke="#c0392b" stroke-width="2.2" stroke-linecap="round"/>
+      <g fill="#8a929c" stroke="#5c636c" stroke-width="1">
+        <circle cx="24" cy="24" r="4.2"/><circle cx="40" cy="24" r="4.2"/>
+        <circle cx="24" cy="40" r="4.2"/><circle cx="40" cy="40" r="4.2"/>
+      </g>
+      <g fill="#f08c2e"><circle cx="24" cy="24" r="1.9"/><circle cx="40" cy="24" r="1.9"/><circle cx="24" cy="40" r="1.9"/><circle cx="40" cy="40" r="1.9"/></g>
+      <circle cx="32" cy="32" r="7" fill="#eef1f4" stroke="#6c7480" stroke-width="1.4"/>
+      <circle cx="32" cy="32" r="3.2" fill="#2b2f36"/>`,
+
+    casco_boba: `
+      <path d="M50 22 V8" stroke="#8a8f99" stroke-width="2.2"/>
+      <rect x="47.5" y="4" width="5" height="6" rx="1" fill="#9aa3ad" stroke="#5c636c" stroke-width="1"/>
+      <path d="M32 6 C18 6 12 15 12 27 V46 C12 52 14 56 18 58 H46 C50 56 52 52 52 46 V27 C52 15 46 6 32 6Z" fill="#4e7a52" stroke="#2c4630" stroke-width="1.6"/>
+      <path d="M12 41 H25 V58 H18 C14 56 12 52 12 46Z" fill="#8c8a5c" stroke="#2c4630" stroke-width="1.2"/>
+      <path d="M52 41 H39 V58 H46 C50 56 52 52 52 46Z" fill="#8c8a5c" stroke="#2c4630" stroke-width="1.2"/>
+      <path d="M21 9 Q32 6 43 9 L41 15 Q32 13 23 15Z" fill="#b5442f"/>
+      <path d="M16 24 H48 V31 H36.5 V50 H27.5 V31 H16Z" fill="#1c1a17"/>
+      <path d="M15 22 H49" stroke="#b5442f" stroke-width="1.6"/>
+      <rect x="50" y="22" width="6" height="10" rx="2" fill="#8a8f99" stroke="#5c636c" stroke-width="1"/>
+      <path d="M39 15 L43 18 L41 21" stroke="#2c4630" stroke-width="1.2" fill="none"/>`,
+
+    estrella_muerte: `
+      <circle cx="32" cy="32" r="27" fill="#8e959e" stroke="#4c525a" stroke-width="1.6"/>
+      <path d="M32 5 A27 27 0 0 1 32 59 A19 27 0 0 0 32 5Z" fill="#000000" fill-opacity="0.18"/>
+      <path d="M5.5 33 Q32 37.5 58.5 33" stroke="#4c525a" stroke-width="2.4" fill="none"/>
+      <path d="M10 23 H18 M30 13 H44 M41 23 H54 M9 43 H25 M34 45 H52 M18 51 H30 M38 52 H47" stroke="#6b7179" stroke-width="1"/>
+      <circle cx="22" cy="20" r="7.5" fill="#787f88" stroke="#4c525a" stroke-width="1.4"/>
+      <circle cx="22" cy="20" r="4.5" fill="none" stroke="#5c636c" stroke-width="1"/>
+      <circle cx="22" cy="20" r="2" fill="#4fbf8b"/>
+      <g fill="#f2d48a"><circle cx="46" cy="18" r="0.8"/><circle cx="14" cy="40" r="0.8"/><circle cx="40" cy="48" r="0.8"/><circle cx="50" cy="40" r="0.8"/></g>`,
 
     // ── Fantasía (Jossef) ────────────────────────────────────────────────────
     pocion: `
@@ -82,6 +120,28 @@
       <circle cx="53" cy="22" r="1.6" fill="#f2d48a"/>
       <path d="M52 19 L49 12 L55 18Z" fill="#efe3c6"/>
       <path d="M61 25 Q64 29 61 33 Q60 30 57 29Z" fill="#f08c2e"/>`,
+
+    unicornio: `
+      <path d="M30 19 L21 2 L35 18Z" fill="#f2d48a" stroke="#b08a2e" stroke-width="1.2"/>
+      <path d="M26 11 L31 10 M24 7 L28 6 M28 15 L33 14" stroke="#b08a2e" stroke-width="1"/>
+      <path d="M22 58 C20 46 22 36 28 28 L27 20 C31 18 35 18 39 20 L47 24 C51 26 55 30 54 34 C53 37 49 38 45 36 L41 34 C40 41 44 49 48 58Z" fill="#f4f1fa" stroke="#9a92b5" stroke-width="1.6"/>
+      <path d="M34 19 L36 11 L39 20Z" fill="#f4f1fa" stroke="#9a92b5" stroke-width="1.2"/>
+      <path d="M28 21 C19 24 14 34 17 46 C12 40 11 30 17 24 C20 20 24 19 28 21Z" fill="#c3a6ff" stroke="#8b6be0" stroke-width="1"/>
+      <path d="M27 30 C21 34 19 42 22 52 C17 46 17 36 22 31Z" fill="#8fd6e8" stroke="#5aa9bd" stroke-width="1"/>
+      <circle cx="40" cy="26" r="1.8" fill="#2b2540"/>
+      <circle cx="51" cy="32" r="1" fill="#9a92b5"/>
+      <path d="M55 8 l1.4 3 3 1.4 -3 1.4 -1.4 3 -1.4 -3 -3 -1.4 3 -1.4z" fill="#f2d48a"/>`,
+
+    grial: `
+      <circle cx="32" cy="22" r="19" fill="#f2d48a" fill-opacity="0.16"/>
+      <path d="M32 1 V4 M14 6 L17 8 M50 6 L47 8 M9 20 H12 M55 20 H52" stroke="#f2d48a" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M16 10 H48 C48 24 42 32 32 33 C22 32 16 24 16 10Z" fill="#d9b45a" stroke="#8a6d27" stroke-width="1.6"/>
+      <ellipse cx="32" cy="10" rx="16" ry="3.5" fill="#f2d48a" stroke="#8a6d27" stroke-width="1.4"/>
+      <path d="M21 15 Q22 24 28 29" stroke="#fff3cf" stroke-opacity="0.7" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <circle cx="26" cy="21" r="2" fill="#c0392b"/><circle cx="38" cy="21" r="2" fill="#3a6fc4"/><circle cx="32" cy="23" r="2.4" fill="#46b98a"/>
+      <path d="M29 33 H35 V46 H29Z" fill="#c9a24a" stroke="#8a6d27" stroke-width="1.2"/>
+      <ellipse cx="32" cy="39" rx="5.5" ry="2.6" fill="#d9b45a" stroke="#8a6d27" stroke-width="1.2"/>
+      <path d="M18 57 C20 50 26 46 32 46 C38 46 44 50 46 57Z" fill="#d9b45a" stroke="#8a6d27" stroke-width="1.6"/>`,
 
     // ── Vikingos (Sebastian) ─────────────────────────────────────────────────
     casco_vikingo: `
@@ -121,6 +181,27 @@
       <path d="M17 38 C23 30 33 30 42 34 C34 37 26 41 17 38Z" fill="#2f2c3d" stroke="#8d89a6" stroke-width="1"/>
       <circle cx="48.5" cy="18" r="1.8" fill="#f2d48a"/>
       <path d="M8 58 L16 52 M56 58 L48 52" stroke="#5b9bd5" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>`,
+
+    escudo_runico: `
+      <circle cx="32" cy="32" r="27" fill="#8a5a2e" stroke="#4a3418" stroke-width="2"/>
+      <path d="M14 12 V52 M23 7 V57 M32 5 V59 M41 7 V57 M50 12 V52" stroke="#6b4423" stroke-width="1.2"/>
+      <path d="M32 8 A24 24 0 0 1 56 32 H32Z" fill="#5b9bd5" fill-opacity="0.6"/>
+      <path d="M32 56 A24 24 0 0 1 8 32 H32Z" fill="#5b9bd5" fill-opacity="0.6"/>
+      <circle cx="32" cy="32" r="24.5" fill="none" stroke="#9aa4b1" stroke-width="2.5"/>
+      <circle cx="32" cy="32" r="7.5" fill="#c3cad3" stroke="#5c6672" stroke-width="1.6"/>
+      <circle cx="29.5" cy="29.5" r="2.2" fill="#ffffff" fill-opacity="0.55"/>
+      <path d="M42 15 V25 M42 16 L47 19 L42 22 L47 25" stroke="#f3ead7" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M20 39 V49 M20 40 L25 43 M20 44 L25 47" stroke="#f3ead7" stroke-width="1.7" fill="none" stroke-linecap="round"/>`,
+
+    fenrir: `
+      <path d="M14 8 L23 24 H41 L50 8 L53 30 C53 44 43 54 32 58 C21 54 11 44 11 30Z" fill="#6f7a88" stroke="#3a424d" stroke-width="1.6"/>
+      <path d="M16 14 L21 23 H17Z" fill="#c9a28a"/><path d="M48 14 L43 23 H47Z" fill="#c9a28a"/>
+      <path d="M32 23 V30 M27.5 24 L29.5 30 M36.5 24 L34.5 30" stroke="#3a424d" stroke-width="1.2"/>
+      <path d="M23 39 C23 32 41 32 41 39 L36.5 53 H27.5Z" fill="#b8c0ca"/>
+      <path d="M19 31 L28 33 L20 36Z" fill="#f2d48a"/><path d="M45 31 L36 33 L44 36Z" fill="#f2d48a"/>
+      <path d="M29 40 H35 L32 44Z" fill="#1c1923"/>
+      <path d="M28 49 L29.2 53 L30.4 49Z M33.6 49 L34.8 53 L36 49Z" fill="#ffffff"/>
+      <g fill="none" stroke="#d9b45a" stroke-width="2"><ellipse cx="17" cy="58" rx="4.5" ry="2.6"/><ellipse cx="25" cy="60" rx="4.5" ry="2.6"/><ellipse cx="39" cy="60" rx="4.5" ry="2.6"/><ellipse cx="47" cy="58" rx="4.5" ry="2.6"/></g>`,
 
     // ── Literatura (Santiago) ────────────────────────────────────────────────
     samsa: `
@@ -177,7 +258,25 @@
       <ellipse cx="28" cy="42" rx="2" ry="3" fill="#9b4b5e"/><ellipse cx="36" cy="42" rx="2" ry="3" fill="#9b4b5e"/>
       <circle cx="23.5" cy="29" r="2.8" fill="#2b1b1f"/><circle cx="40.5" cy="29" r="2.8" fill="#2b1b1f"/>
       <circle cx="24.4" cy="28" r="0.9" fill="#fff"/><circle cx="41.4" cy="28" r="0.9" fill="#fff"/>
-      <path d="M48 52 V62 M48 52 H58 V57 H48" stroke="#2f6b3c" stroke-width="1.6" fill="#3f8f50"/>`
+      <path d="M48 52 V62 M48 52 H58 V57 H48" stroke="#2f6b3c" stroke-width="1.6" fill="#3f8f50"/>`,
+
+    mariposas: `
+      <g fill="#f2d03b" stroke="#8a6d10" stroke-width="1.3" stroke-linejoin="round">
+        <path d="M30 30 C20 13 5 15 7 28 C8 35 18 35 30 30Z"/>
+        <path d="M30 30 C40 13 55 15 53 28 C52 35 42 35 30 30Z"/>
+        <path d="M30 31 C22 34 13 42 19 47 C24 50 29 41 30 31Z"/>
+        <path d="M30 31 C38 34 47 42 41 47 C36 50 31 41 30 31Z"/>
+      </g>
+      <g fill="#e8a33d"><circle cx="15" cy="25" r="2.4"/><circle cx="45" cy="25" r="2.4"/><circle cx="22" cy="42" r="1.6"/><circle cx="38" cy="42" r="1.6"/></g>
+      <path d="M30 20 V44" stroke="#3a2a10" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M30 21 Q26 12 22 10 M30 21 Q34 12 38 10" stroke="#3a2a10" stroke-width="1.2" fill="none"/>
+      <g transform="translate(51 52) scale(0.36)" fill="#f2d03b" stroke="#8a6d10" stroke-width="3">
+        <path d="M0 0 C-10 -17 -25 -15 -23 -2 C-22 5 -12 5 0 0Z"/><path d="M0 0 C10 -17 25 -15 23 -2 C22 5 12 5 0 0Z"/>
+        <path d="M0 1 C-8 4 -17 12 -11 17 C-6 20 -1 11 0 1Z"/><path d="M0 1 C8 4 17 12 11 17 C6 20 1 11 0 1Z"/>
+      </g>
+      <g transform="translate(52 8) scale(0.26) rotate(20)" fill="#f2d03b" stroke="#8a6d10" stroke-width="3.5">
+        <path d="M0 0 C-10 -17 -25 -15 -23 -2 C-22 5 -12 5 0 0Z"/><path d="M0 0 C10 -17 25 -15 23 -2 C22 5 12 5 0 0Z"/>
+      </g>`
   };
 
   const svgCache = {};

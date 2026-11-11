@@ -35,7 +35,7 @@ const BOARD_SIZE     = 40;
 
 // Dos tonos por integrante: grupo A y grupo B.
 const GROUP_COLORS = [
-  '#d94841', '#f08c2e', // David     — Piratas    (rojo bandera, naranja ron)
+  '#d94841', '#f08c2e', // David     — Star Wars  (rojo sable Sith, naranja Alianza Rebelde)
   '#34b37a', '#8b6be0', // Jossef    — Fantasía   (esmeralda, amatista)
   '#6fa8dc', '#3b6fb6', // Sebastian — Vikingos   (hielo, fiordo profundo)
   '#c08a4a', '#a3456b'  // Santiago  — Literatura (sepia, borgoña)
@@ -50,18 +50,18 @@ const CORNERS = [
 
 // Nombres de cada lado. Orden de las propiedades: A1, A2, B1, B2, B3.
 const WORLDS = [
-  { // David — Piratas
-    groupA: 'Puertos Libres',
-    groupB: 'Islas Malditas',
+  { // David — Star Wars
+    groupA: 'Borde Exterior',
+    groupB: 'Mundos de la República',
     props: [
-      { name: 'Isla Tortuga',                 icon: '🐢' },
-      { name: 'Bahía de Cartagena de Indias', icon: '🏰' },
-      { name: 'Port Royal',                   icon: '⚓' },
-      { name: 'Isla Calavera',                icon: '💀' },
-      { name: 'Isla del Tesoro de Flint',     icon: '💰' }
+      { name: 'Cantina de Mos Eisley, Tatooine', icon: '🍸' },
+      { name: 'Ciudad de las Nubes, Bespin',     icon: '☁' },
+      { name: 'Palacio Real de Theed, Naboo',    icon: '👑' },
+      { name: 'Ciudad Tipoca, Kamino',           icon: '🌊' },
+      { name: 'Templo Jedi, Coruscant',          icon: '🏛' }
     ],
-    transport: { name: "Galeón Queen Anne's Revenge", icon: '⛵' },
-    donation:  'el Cofre de Davy Jones'
+    transport: { name: 'Halcón Milenario', icon: '🚀' },
+    donation:  'el Palacio de Jabba el Hutt'
   },
   { // Jossef — Fantasía
     groupA: 'Bosques Feéricos',

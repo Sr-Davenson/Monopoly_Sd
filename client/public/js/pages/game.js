@@ -30,7 +30,7 @@ let rejoinTried = -1;       // versión del estado en la que ya se intentó volv
 let lastSeat = null;        // temática/ficha con la que estábamos en la sala de espera
 let tradeDraft = emptyDraft();
 
-const WORLD_COLOR = { david: 'var(--pirate)', jossef: 'var(--fantasy)', sebastian: 'var(--viking)', santiago: 'var(--letters)' };
+const WORLD_COLOR = { david: 'var(--galaxy)', jossef: 'var(--fantasy)', sebastian: 'var(--viking)', santiago: 'var(--letters)' };
 
 // Utilidades de DOM compartidas (js/lib/dom.js)
 const { $, el } = Dom;

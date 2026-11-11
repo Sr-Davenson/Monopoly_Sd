@@ -144,7 +144,7 @@
 .canvas-frame {
   border-radius: 12px;
   padding: 6px;
-  background: linear-gradient(135deg, var(--pirate), var(--fantasy), var(--viking), var(--letters));
+  background: linear-gradient(135deg, var(--galaxy), var(--fantasy), var(--viking), var(--letters));
 }
 canvas#game-canvas {
   display: block;

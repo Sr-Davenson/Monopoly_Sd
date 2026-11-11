@@ -289,7 +289,7 @@
   gap: 0.75rem;
   padding: 1rem;
   background:
-    radial-gradient(circle at 15% 15%, color-mix(in srgb, var(--pirate) 14%, transparent), transparent 45%),
+    radial-gradient(circle at 15% 15%, color-mix(in srgb, var(--galaxy) 14%, transparent), transparent 45%),
     radial-gradient(circle at 15% 85%, color-mix(in srgb, var(--fantasy) 14%, transparent), transparent 45%),
     radial-gradient(circle at 85% 15%, color-mix(in srgb, var(--viking) 14%, transparent), transparent 45%),
     radial-gradient(circle at 85% 85%, color-mix(in srgb, var(--letters) 16%, transparent), transparent 45%),

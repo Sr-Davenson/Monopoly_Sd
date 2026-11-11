@@ -4,7 +4,7 @@
 // Cada integrante es dueño de un lado del tablero (9 casillas entre dos
 // esquinas). El resto del juego (tablero, temáticas, fichas) lee estos datos.
 //
-//   lado 0 → casillas 1-9   (entre Salida y Calabozo)          — Piratas
+//   lado 0 → casillas 1-9   (entre Salida y Calabozo)          — Star Wars
 //   lado 1 → casillas 11-19 (entre Calabozo y Taberna)         — Fantasía
 //   lado 2 → casillas 21-29 (entre Taberna y Ve al Calabozo)   — Vikingos
 //   lado 3 → casillas 31-39 (entre Ve al Calabozo y Salida)    — Literatura
@@ -16,9 +16,9 @@ const MEMBERS = [
     name: 'David',
     side: 0,
     color: '#e05a47',
-    world: 'Piratas',
-    sectionName: 'Mar de los Corsarios',
-    idea: 'Islas, galeones y tesoros enterrados: el Caribe de los bucaneros.'
+    world: 'Star Wars',
+    sectionName: 'Galaxia Muy Lejana',
+    idea: 'Del Borde Exterior a los mundos de la República: de una cantina de Tatooine al Templo Jedi.'
   },
   {
     id: 'jossef',
