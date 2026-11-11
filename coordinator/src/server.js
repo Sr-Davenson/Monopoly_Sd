@@ -51,10 +51,17 @@ function start() {
     panel.openInBrowser();
   });
 
-  process.on('SIGINT', () => {
-    log('STOP', 'Ctrl+C recibido: el coordinador se detiene (el auth lo descartará al no recibir heartbeats).');
+  // Ctrl+C: avisa al directorio para que los demás lo noten al instante
+  let stopping = false;
+  const stop = async () => {
+    if (stopping) return process.exit(0);
+    stopping = true;
+    log('STOP', 'Cerrando: aviso al directorio para que reparta la carga entre los demás…');
+    await directory.leave();
     process.exit(0);
-  });
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
 }
 
 module.exports = { start };

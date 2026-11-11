@@ -4,7 +4,7 @@ Juego de tablero multijugador en tiempo real. Cuatro mundos comparten el tablero
 
 - **Salas dinámicas**: cualquier jugador crea una sala desde el lobby. La sala queda alojada en su coordinador y se ve desde **todos** los coordinadores.
 - **Cambio automático de coordinador**: quien entra a una sala alojada en otro coordinador se cambia solo al anfitrión. Esto vale tanto para jugar como para observar.
-- **Balanceo de carga**: el auth-service manda a cada jugador del lobby al coordinador menos cargado y reparte los empates por turnos (10 jugadores y 2 coordinadores quedan 5 y 5).
+- **Balanceo de carga**: el auth-service manda a cada jugador al coordinador menos cargado y reparte los empates por turnos (10 jugadores y 2 coordinadores quedan 5 y 5). **Cada vez que entra o sale un coordinador, recalcula las cargas y vuelve a repartir** a los jugadores del lobby en 1–2 s.
 - **Replicación y tolerancia a fallos**: todas las salas y jugadores se replican. Si el anfitrión de una sala cae, otro coordinador la adopta con su estado.
 - **Panel del coordinador**: al arrancar se abre una página con los demás coordinadores de la red y el estado del enlace con cada uno.
 
@@ -44,13 +44,13 @@ flowchart LR
     LB -->|2. GET /coordinator| A3
     LB -->|3. WS /connect| CB
     G -->|"GET /coordinator?prefer=anfitrión → WS"| CA
-    CA & CB & CX -->|heartbeat cada 2 s| A2
+    CA & CB & CX -->|heartbeat cada 1 s| A2
     CA & CB & CX -->|descubrir pares| A4
 ```
 
 | Componente | Responsabilidad |
 | --- | --- |
-| `auth-service/` | Usuarios (bcrypt + JWT + Google). **Directorio de coordinadores y balanceador**: recibe heartbeats, descarta los que llevan más de 6 s sin latir y responde `/coordinator`, `/coordinators` y `/peers`. Guarda el progreso de misiones. |
+| `auth-service/` | Usuarios (bcrypt + JWT + Google). **Directorio de coordinadores y balanceador**: recibe heartbeats, descarta los que llevan más de 3 s sin latir (o que se despiden con `/leave`), **rebalancea** cuando cambia la red y responde `/coordinator`, `/coordinators` y `/peers`. Guarda el progreso de misiones. |
 | `coordinator/` | Atiende a sus clientes por WS, forma la mesh con los demás coordinadores, aloja las salas que crean sus jugadores, replica todo y corre la plaza a 20 Hz. Abre su **panel** en el navegador. |
 | `client/` | Login, lobby (crear y listar salas, plaza en canvas, jugadores en línea, colección) y tablero. Pide coordinador al auth antes de abrir cada WS y se reconecta o se cambia de coordinador solo. |
 
@@ -64,7 +64,7 @@ auth-service/
   src/config.js                Variables del .env
   src/db.js                    SQLite (usuarios, progreso, partidas)
   src/routes/auth.js           /register · /login · /auth/google
-  src/routes/directory.js      /heartbeat · /coordinator (balanceo) · /coordinators · /peers
+  src/routes/directory.js      /heartbeat · /leave · /coordinator (balanceo y rebalanceo) · /coordinators · /peers
   src/routes/progress.js       /me/progress · /internal/match-result
 
 coordinator/
@@ -122,7 +122,8 @@ Cualquier otro coordinador: `node index.js --id coord-x --port 5004`. Con ngrok:
 | Servicio | Variable | Por defecto | Uso |
 | --- | --- | --- | --- |
 | auth | `PORT`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `DB_PATH`, `GOOGLE_CLIENT_ID` | | Igual que en talleres anteriores |
-| auth | `HEARTBEAT_TTL_MS` | `6000` | Sin heartbeat durante este tiempo → coordinador muerto |
+| auth | `HEARTBEAT_TTL_MS` | `3000` | Sin heartbeat durante este tiempo → coordinador muerto |
+| auth | `REBALANCE_WINDOW_MS`, `REBALANCE_COOLDOWN_MS` | `30000`, `1000` | Tiempo que se sigue rebalanceando tras un cambio en la red / pausa mínima entre planes |
 | coordinator | `--id`, `--port`, `--auth-url`, `--public-url`, `--ngrok`, `--no-panel` | | Ver tutorial §8 |
 | coordinator | `TURN_TIMEOUT_MS`, `MAX_ROOMS`, `ROOM_EMPTY_MS`, `ROOM_ABANDON_MS` | `90000`, `24`, `60000`, `90000` | Tiempo por turno, límite de salas, borrar sala vacía o abandonada |
 | client | `PORT`, `AUTH_URL`, `GOOGLE_CLIENT_ID` | | El cliente **no tiene** URL de coordinador fija |
@@ -131,11 +132,34 @@ Cualquier otro coordinador: `node index.js --id coord-x --port 5004`. Con ngrok:
 
 ## 4. Endpoints del directorio (auth-service)
 
-### `POST /heartbeat` — cada coordinador, cada 2 s
+### `POST /heartbeat` — cada coordinador, cada 1 s
 
 ```bash
 curl -X POST http://localhost:4000/heartbeat -H "Content-Type: application/json" \
-  -d '{"coordinatorId":"coord-a","publicUrl":"wss://a.ngrok-free.app","peerUrl":"wss://a.ngrok-free.app/peer","connectedPlayers":7,"uptime":12345}'
+  -d '{"coordinatorId":"coord-a","publicUrl":"wss://a.ngrok-free.app","peerUrl":"wss://a.ngrok-free.app/peer","connectedPlayers":7,"lobbyPlayers":5,"uptime":12345}'
+# 200 {"ok":true}
+# 200 {"ok":true,"rebalance":{"moves":[{"coordinatorId":"coord-a","count":3}]}}   ← orden de rebalanceo
+```
+
+`lobbyPlayers` son los jugadores que se pueden mover: están en el lobby, no dentro de una sala.
+
+### Rebalanceo cuando cambia la red
+
+Cada vez que **entra** un coordinador (nuevo o que vuelve) o **sale** uno (por TTL o con `POST /leave`), el directorio recalcula las cargas durante 30 s:
+
+1. Espera a tener **datos frescos**: que todos los coordinadores hayan latido después de la última asignación, para no decidir con cifras viejas.
+2. Calcula **un plan global**. El ideal es `total / N` por coordinador. Cada coordinador por encima del techo mueve su exceso a los que están por debajo del piso. Por ejemplo, con A=3 y B=3, si entra C queda A: 1 → C y B: 1 → C.
+3. Entrega a cada coordinador su parte en la respuesta de su siguiente heartbeat.
+4. El coordinador cierra a esos jugadores con **`4011 move:<destino>`**, empezando por los que llegaron más recientemente. El cliente se reconecta a ese destino y el lobby avisa *"Balanceo de carga: te movemos de B a A…"*.
+
+Tiempos medidos en local: cae A → todos en B en 0,5 s · vuelve A → 3/3 en 1,8 s · entra C → 2/2/2 en 1,9 s · C se despide → 3/3 en 0,5 s.
+
+### `POST /leave` — un coordinador que se cierra con Ctrl+C
+
+Lleva el JWT de servicio. El directorio lo saca **al instante**, sin esperar el TTL, y rebalancea.
+
+```bash
+curl -X POST http://localhost:4000/leave -H "Authorization: Bearer <JWT de servicio>"   # lo hace el coordinador al recibir Ctrl+C
 # 200 {"ok":true}
 ```
 
@@ -168,7 +192,7 @@ curl http://localhost:4000/coordinator?exclude=coord-b    # cualquiera menos el 
 
 ## 5. Protocolo de la mesh
 
-Cada coordinador escucha a sus pares en **`<publicUrl>/peer`**, el mismo puerto y el mismo túnel que los clientes. Cada 2 s pide `/coordinators` y abre conexión hacia los pares que aún no tiene.
+Cada coordinador escucha a sus pares en **`<publicUrl>/peer`**, el mismo puerto y el mismo túnel que los clientes. Cada 1 s pide `/coordinators` y abre conexión hacia los pares que aún no tiene.
 
 **Una sola conexión por par.** Solo el coordinador con el id **menor** (orden lexicográfico) inicia la conexión; el mayor espera. Si aun así llega una conexión de un par con el que ya hay enlace, se cierra la nueva (`4009 duplicate peer link`).
 
@@ -220,7 +244,7 @@ El campo `auth` es un JWT `{ role: "coordinator" }` firmado con `JWT_SECRET`. As
 
 1. Login → `GET /coordinator` → WS a `publicUrl/connect?token=…` (`public/js/lib/net.js`).
 2. La UI muestra el coordinador en la barra superior, en la plaza junto a **"Tick: 20 Hz"**, bajo cada ficha del canvas, en la lista de jugadores y en cada sala ("Alojada en coord-a").
-3. **Si el WS se cae**, el cliente vuelve a pedir `GET /coordinator?exclude=<el caído>`. Los cierres 4001, 4002, 4003 y 4004 son definitivos. El cierre 4010 es un **cambio de coordinador**.
+3. **Si el WS se cae**, el cliente vuelve a pedir `GET /coordinator?exclude=<el caído>`. Los cierres 4001, 4002, 4003 y 4004 son definitivos. Los cierres 4010 (sala en otro coordinador) y 4011 (rebalanceo) son un **cambio de coordinador**.
 4. **Sesión única en toda la mesh**: si el mismo usuario abre sesión en otro coordinador, la vieja se cierra con `4002`.
 5. En la sala de espera, si el cliente pierde o cambia de coordinador, recupera su asiento con la misma temática y ficha.
 
@@ -263,10 +287,10 @@ El tutorial completo está en **[`docs/COORDINADORES_NGROK.md`](docs/COORDINADOR
 ## 10. Guía de la sustentación
 
 1. **Red de coordinadores (3 min).** Levantar el auth y dos o tres coordinadores. Mostrar el **panel** de cada uno: todos se ven entre sí y aparecen como `enlazado`. `curl <auth>/coordinators` muestra la carga y el último heartbeat.
-2. **Balanceo (2 min).** Abrir 4 a 10 pestañas (un usuario por pestaña). La consola del auth muestra `GET /coordinator → coord-x · menos cargado` y los jugadores quedan repartidos por igual.
+2. **Balanceo y rebalanceo (3 min).** Abrir 6 pestañas (un usuario por pestaña): quedan 3 y 3. `Ctrl+C` en A: todos pasan a B. Volver a encender A: en 1–2 s quedan otra vez 3 y 3 (la consola del auth muestra `[BALANCE] … Plan: coord-b: 3 → coord-a`). Encender C: quedan 2/2/2.
 3. **Crear sala en A y unirse desde B (3 min).** Un jugador en `coord-a` crea "La guarida". Un jugador en `coord-b` la ve con "Alojada en coord-a · al entrar pasarás de coord-b a coord-a". Al pulsar "Unirme", el tablero se conecta a `coord-a`. El panel de `coord-a` muestra a ambos jugadores en la sala.
 4. **Observar (1 min).** Un tercero en `coord-b` pulsa "Observar partida" y también se cambia a `coord-a`.
-5. **Matar el anfitrión (3 min).** `Ctrl+C` en `coord-a`. En unos 6 s el auth lo descarta y `coord-b` adopta la sala ("Adopto la sala…" en su panel). Los jugadores se reconectan solos y siguen la partida.
+5. **Matar el anfitrión (3 min).** `Ctrl+C` en `coord-a`. Al instante (Ctrl+C avisa con `/leave`; si el proceso muere sin avisar, en 3 s) el auth lo descarta y `coord-b` adopta la sala ("Adopto la sala…" en su panel). Los jugadores se reconectan solos y siguen la partida.
 6. **Sumar un coordinador en vivo (1 min).** `node index.js --id coord-x --port 5009`. Aparece en los paneles de todos y empieza a recibir jugadores.
 
 ---

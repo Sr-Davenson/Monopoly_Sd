@@ -59,8 +59,8 @@ const config = {
   openPanel:        !args['no-panel'] && process.env.OPEN_PANEL !== '0',
   legacyPeerPort:   args['peer-port'] || null,
 
-  DIRECTORY_EVERY_MS: Number(process.env.DIRECTORY_INTERVAL || 2000), // heartbeat + /coordinators
-  PEER_PING_MS:       2000,   // keepalive del enlace entre coordinadores
+  DIRECTORY_EVERY_MS: Number(process.env.DIRECTORY_INTERVAL || 1000), // heartbeat + /coordinators
+  PEER_PING_MS:       1000,   // keepalive del enlace entre coordinadores
   POSITION_SYNC_MS:   1000,   // corrección de deriva de posiciones
   HEARTBEAT_MS:       Number(process.env.HEARTBEAT_INTERVAL || 30000), // ping a clientes
 
@@ -79,7 +79,7 @@ const config = {
   MAX_ROOMS:         Number(process.env.MAX_ROOMS || 24),
   ROOM_EMPTY_MS:     Number(process.env.ROOM_EMPTY_MS || 60000),    // sala sin nadie (sin iniciar) → se borra
   ROOM_ABANDON_MS:   Number(process.env.ROOM_ABANDON_MS || 90000),  // partida sin nadie conectado → se borra
-  ORPHAN_GRACE_MS:   Number(process.env.ORPHAN_GRACE_MS || 4000),   // anfitrión caído → otro adopta la sala
+  ORPHAN_GRACE_MS:   Number(process.env.ORPHAN_GRACE_MS || 2000),   // anfitrión caído → otro adopta la sala
   ROOM_EMBLEMS:      ['galaxia', 'nave', 'yggdrasil', 'dragon', 'drakkar', 'martillo', 'babel', 'pluma'],
 
   STARTED_AT: Date.now()

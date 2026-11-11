@@ -11,7 +11,7 @@ const config = {
   DB_PATH:          process.env.DB_PATH
     ? path.resolve(__dirname, '..', process.env.DB_PATH)
     : path.join(__dirname, '..', 'users.db'),
-  HEARTBEAT_TTL_MS: Number(process.env.HEARTBEAT_TTL_MS || 6000)
+  HEARTBEAT_TTL_MS: Number(process.env.HEARTBEAT_TTL_MS || 3000)   // 3 latidos de 1 s
 };
 
 function validate() {

@@ -14,6 +14,9 @@
 // Cierre 4010 ("host:<id>"): la sala pedida la atiende otro coordinador. El
 // cliente se cambia a ese coordinador automáticamente (onRedirect).
 //
+// Cierre 4011 ("move:<id>"): el balanceador de carga reparte jugadores porque
+// entró o salió un coordinador. El cliente se cambia a ese coordinador.
+//
 // Los cierres 4001 (token inválido), 4002 (sesión duplicada), 4003 (token
 // manipulado) y 4004 (sala inválida) son definitivos: no se reintenta.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -22,7 +25,8 @@
   const AUTH_URL = (cfg.AUTH_URL || 'http://localhost:4000').replace(/\/+$/, '');
   const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
   const FATAL_CODES = new Set([4001, 4002, 4003, 4004]);
-  const REDIRECT_CODE = 4010;
+  // 4010 → la sala vive en otro coordinador · 4011 → rebalanceo de carga
+  const REDIRECT = { 4010: /^host:(.+)$/, 4011: /^move:(.+)$/ };
 
   async function requestCoordinator({ exclude, prefer } = {}) {
     const qs = new URLSearchParams();
@@ -52,7 +56,7 @@
   //   token, params: { view, room }, prefer: 'coord-a' (opcional),
   //   onStatus(state: 'connecting'|'connected'|'disconnected', text, info),
   //   onOpen(info), onMessage(msg), onFatal(code, reason), onLost(info),
-  //   onRedirect(fromId, toId)
+  //   onRedirect(fromId, toId, reason: 'host' | 'balance')
   // }
   function connectCoordinator(opts) {
     let ws = null;
@@ -116,13 +120,16 @@
           return opts.onFatal && opts.onFatal(event.code, event.reason);
         }
 
-        // La sala vive en otro coordinador: cambiarse a él.
-        if (event.code === REDIRECT_CODE && /^host:/.test(event.reason || '')) {
-          const target = event.reason.slice(5);
-          console.log(`[NET] ${info.coordinatorId} indica que la sala está en ${target}: cambiando de coordinador`);
+        // Cambio de coordinador ordenado por el servidor (sala o balanceo)
+        const m = REDIRECT[event.code] && String(event.reason || '').match(REDIRECT[event.code]);
+        if (m) {
+          const target = m[1];
+          const why = event.code === 4010 ? 'host' : 'balance';
+          console.log(`[NET] ${info.coordinatorId} → ${target} (${why === 'host' ? 'anfitrión de la sala' : 'rebalanceo de carga'})`);
           prefer = target;
           lastFailed = null;
-          opts.onRedirect && opts.onRedirect(info.coordinatorId, target);
+          status('connecting', `Cambiando de ${info.coordinatorId} a ${target}…`);
+          opts.onRedirect && opts.onRedirect(info.coordinatorId, target, why);
           return retry(true);
         }
 

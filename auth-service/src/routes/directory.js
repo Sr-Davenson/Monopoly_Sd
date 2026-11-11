@@ -1,16 +1,24 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // SERVICIO DE DIRECTORIO DE COORDINADORES + BALANCEADOR DE CARGA
 //
-// Los coordinadores se anuncian con POST /heartbeat cada 2 s. Si uno no lo hace
-// durante HEARTBEAT_TTL_MS (6 s = 3 ciclos) se considera muerto y se descarta.
+// Los coordinadores se anuncian con POST /heartbeat cada 1 s. Si uno no lo hace
+// durante HEARTBEAT_TTL_MS (3 s = 3 ciclos) se considera muerto y se descarta.
+// Si se cierra bien (Ctrl+C) avisa con POST /leave y sale al instante.
 //
 //   GET /coordinator              → el coordinador vivo MENOS cargado
 //   GET /coordinator?prefer=X     → X si está vivo (anfitrión de una sala)
 //   GET /coordinator?exclude=X    → cualquiera menos X (el que acaba de fallar)
 //   GET /coordinators             → todos, con carga y último latido
 //   GET /peers                    → { coordinatorId, peerUrl } de cada uno
+//
+// REBALANCEO: cada vez que entra un coordinador (nuevo o que vuelve) o sale uno,
+// el directorio recalcula las cargas. Durante REBALANCE_WINDOW_MS, en la
+// respuesta del heartbeat le ordena al coordinador sobrecargado mover N
+// jugadores del LOBBY a los que están por debajo del promedio. Los jugadores
+// que están dentro de una sala no se mueven (se quedan con el anfitrión).
 // ─────────────────────────────────────────────────────────────────────────────
 const express = require('express');
+const jwt = require('jsonwebtoken');
 const { config } = require('../config');
 
 const router = express.Router();
@@ -19,6 +27,19 @@ const COORD_ID_RE = /^[a-zA-Z0-9_.-]{1,64}$/;
 // Map<coordinatorId, { coordinatorId, publicUrl, peerUrl, connectedPlayers, reserved, uptime, lastSeen }>
 const coordinators = new Map();
 let roundRobin = 0;
+
+const REBALANCE_WINDOW_MS   = Number(process.env.REBALANCE_WINDOW_MS || 30000); // tras un cambio en la red
+const REBALANCE_COOLDOWN_MS = Number(process.env.REBALANCE_COOLDOWN_MS || 1000); // entre dos órdenes
+let topologyChangedAt = 0;
+let lastOrderAt = 0;
+let lastAssignAt = 0;          // última vez que se mandó un jugador a algún coordinador
+const SETTLE_MS = 300;         // margen para que ese jugador termine de conectarse
+
+function topologyChanged(reason) {
+  topologyChangedAt = Date.now();
+  lastOrderAt = 0;
+  console.log(`[BALANCE] Cambió la red (${reason}). Coordinadores vivos: [${[...coordinators.keys()].join(', ')}]. Se recalculan las cargas.`);
+}
 
 function isWsUrl(u) {
   if (typeof u !== 'string' || u.length > 512) return false;
@@ -35,10 +56,11 @@ function sweep() {
     if (now - c.lastSeen > config.HEARTBEAT_TTL_MS) {
       coordinators.delete(id);
       console.log(`[DIRECTORY] ${id} descartado: sin heartbeat hace ${now - c.lastSeen} ms`);
+      topologyChanged(`salió ${id}`);
     }
   }
 }
-setInterval(sweep, 1000).unref();
+setInterval(sweep, 250).unref();
 
 function alive() {
   sweep();
@@ -50,7 +72,7 @@ const load = (c) => c.connectedPlayers + c.reserved;
 
 // ── POST /heartbeat ───────────────────────────────────────────────────────────
 router.post('/heartbeat', (req, res) => {
-  const { coordinatorId, publicUrl, peerUrl, connectedPlayers, uptime } = req.body || {};
+  const { coordinatorId, publicUrl, peerUrl, connectedPlayers, lobbyPlayers, uptime } = req.body || {};
 
   if (typeof coordinatorId !== 'string' || !COORD_ID_RE.test(coordinatorId)) {
     return res.status(400).json({ error: 'coordinatorId inválido' });
@@ -69,15 +91,93 @@ router.post('/heartbeat', (req, res) => {
     publicUrl,
     peerUrl,
     connectedPlayers: players,
+    // Jugadores que se pueden mover (están en el lobby, no dentro de una sala)
+    lobbyPlayers: Number.isInteger(Number(lobbyPlayers)) ? Math.max(0, Math.min(players, Number(lobbyPlayers))) : players,
     reserved: 0,               // el heartbeat trae la cifra real
     uptime: Number.isFinite(Number(uptime)) ? Number(uptime) : 0,
     lastSeen: Date.now()
   });
-  if (!prev) console.log(`[DIRECTORY] Coordinador registrado: ${coordinatorId} (${publicUrl}, pares ${peerUrl})`);
-  else if (prev.publicUrl !== publicUrl) console.log(`[DIRECTORY] ${coordinatorId} cambió su URL pública a ${publicUrl}`);
+  if (!prev) {
+    console.log(`[DIRECTORY] Coordinador registrado: ${coordinatorId} (${publicUrl}, pares ${peerUrl})`);
+    topologyChanged(`entró ${coordinatorId}`);
+  } else if (prev.publicUrl !== publicUrl) {
+    console.log(`[DIRECTORY] ${coordinatorId} cambió su URL pública a ${publicUrl}`);
+  }
 
-  return res.status(200).json({ ok: true });
+  const rebalance = planRebalance(coordinators.get(coordinatorId));
+  return res.status(200).json(rebalance ? { ok: true, rebalance } : { ok: true });
 });
+
+// ── Plan de rebalanceo ───────────────────────────────────────────────────────
+// Reparto ideal: total / N por coordinador. Con datos frescos se calcula UN
+// plan global: cada coordinador por encima del techo del promedio mueve su
+// exceso (solo jugadores del lobby) a los que están por debajo del piso.
+// Ej.: 6 jugadores, A=3, B=3 y entra C=0 → A mueve 1 a C y B mueve 1 a C.
+// Cada coordinador recibe su parte de la orden en su siguiente heartbeat.
+const pendingOrders = new Map();   // coordinatorId -> { moves, at }
+const ORDER_TTL_MS = 3000;
+
+function planRebalance(self) {
+  const now = Date.now();
+  for (const [id, o] of pendingOrders) if (now - o.at > ORDER_TTL_MS) pendingOrders.delete(id);
+
+  // 1) ¿Hay una orden ya calculada para este coordinador?
+  const mine = pendingOrders.get(self.coordinatorId);
+  if (mine) {
+    pendingOrders.delete(self.coordinatorId);
+    return { moves: mine.moves };
+  }
+  if (pendingOrders.size) return null;                               // falta entregar el plan actual
+  if (now - topologyChangedAt > REBALANCE_WINDOW_MS) return null;    // la red no cambió hace poco
+  if (now - lastOrderAt < REBALANCE_COOLDOWN_MS) return null;
+
+  const list = alive();
+  if (list.length < 2) return null;
+  // Datos frescos: todos reportaron DESPUÉS de la última asignación. Si no,
+  // todavía hay jugadores entrando o moviéndose y las cifras están viejas.
+  if (list.some(c => c.lastSeen < lastAssignAt + SETTLE_MS)) return null;
+
+  // 2) Plan global con las cifras reales de los heartbeats
+  const real = (c) => c.connectedPlayers;
+  const total = list.reduce((n, c) => n + real(c), 0);
+  const floor = Math.floor(total / list.length);
+  const ceil  = Math.ceil(total / list.length);
+
+  const sources = list
+    .map(c => ({ c, excess: Math.min(real(c) - ceil, c.lobbyPlayers) }))
+    .filter(s => s.excess > 0)
+    .sort((a, b) => b.excess - a.excess);
+  const targets = list
+    .map(c => ({ c, deficit: floor - real(c) }))
+    .filter(t => t.deficit > 0)
+    .sort((a, b) => b.deficit - a.deficit);
+  if (!sources.length || !targets.length) return null;
+
+  const plan = [];
+  for (const s of sources) {
+    const moves = [];
+    for (const t of targets) {
+      if (s.excess <= 0) break;
+      const count = Math.min(s.excess, t.deficit);
+      if (count <= 0) continue;
+      moves.push({ coordinatorId: t.c.coordinatorId, count });
+      t.c.reserved += count;            // las asignaciones nuevas ya cuentan la carga que llega
+      t.deficit -= count;
+      s.excess -= count;
+    }
+    if (moves.length) {
+      pendingOrders.set(s.c.coordinatorId, { moves, at: now });
+      plan.push(`${s.c.coordinatorId}: ${moves.map(m => `${m.count} → ${m.coordinatorId}`).join(', ')}`);
+    }
+  }
+  if (!plan.length) return null;
+
+  lastOrderAt = now;
+  lastAssignAt = now;
+  console.log(`[BALANCE] ${list.length} coordinadores, ${total} jugadores (ideal ${floor}-${ceil} c/u). Plan: ${plan.join(' · ')}`);
+
+  return planRebalance(self);          // entrega la parte de este coordinador (si tiene)
+}
 
 // ── GET /coordinator ──────────────────────────────────────────────────────────
 // Balanceo de carga: el coordinador vivo con menos jugadores. Con empate se
@@ -105,9 +205,29 @@ router.get('/coordinator', (req, res) => {
   // Reserva provisional: si varios clientes piden a la vez, no van todos al
   // mismo coordinador antes de su siguiente heartbeat.
   best.reserved++;
+  lastAssignAt = Date.now();
 
   console.log(`[DIRECTORY] GET /coordinator → ${best.coordinatorId} · ${reason}${exclude ? ` · excluyendo ${exclude}` : ''}`);
   return res.json({ coordinatorId: best.coordinatorId, publicUrl: best.publicUrl });
+});
+
+// ── POST /leave ───────────────────────────────────────────────────────────────
+// Un coordinador que se cierra bien avisa para salir del directorio YA (sin
+// esperar el TTL). Exige el JWT de servicio para que nadie saque a otro.
+router.post('/leave', (req, res) => {
+  const h = req.headers.authorization || '';
+  let service;
+  try {
+    service = jwt.verify(h.startsWith('Bearer ') ? h.slice(7) : '', config.JWT_SECRET);
+    if (service.role !== 'coordinator') throw new Error('rol inválido');
+  } catch {
+    return res.status(401).json({ error: 'invalid_service_token' });
+  }
+  if (coordinators.delete(service.coordinatorId)) {
+    console.log(`[DIRECTORY] ${service.coordinatorId} se despidió (cierre ordenado)`);
+    topologyChanged(`salió ${service.coordinatorId}`);
+  }
+  return res.json({ ok: true });
 });
 
 // ── GET /peers ────────────────────────────────────────────────────────────────

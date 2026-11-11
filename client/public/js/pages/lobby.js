@@ -532,6 +532,13 @@ function start() {
       lastSentIntent = { x: 0, y: 0 };
       setTimeout(() => { sendExtras(); sendIntent(true); }, 100);
     },
+    onRedirect(from, to) {
+      // El balanceador reparte la carga (entró o salió un coordinador)
+      const b = $('lost-banner');
+      b.hidden = false;
+      b.textContent = `Balanceo de carga: te movemos de ${from} a ${to}…`;
+      setTimeout(() => { if (conn && conn.isOpen()) b.hidden = true; }, 4000);
+    },
     onLost(info) {
       if (leaving) return;
       mesh = null;

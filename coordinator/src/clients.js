@@ -6,6 +6,9 @@
 //
 // Si la sala está alojada en otro coordinador vivo, el WS se cierra con
 // 4010 "host:<id>" y el cliente se cambia a ese coordinador.
+//
+// Rebalanceo: si el directorio lo ordena, jugadores del LOBBY se cierran con
+// 4011 "move:<id>" y el cliente se reconecta a ese coordinador.
 // ─────────────────────────────────────────────────────────────────────────────
 const jwt = require('jsonwebtoken');
 const { WebSocketServer, WebSocket } = require('ws');
@@ -311,4 +314,22 @@ const handlers = {
   }
 };
 
-module.exports = { handleUpgrade };
+// ── Rebalanceo de carga ordenado por el directorio ───────────────────────────
+// Se mueven solo jugadores del lobby (vista canvas), empezando por los que
+// llegaron más recientemente. Los que están en una sala se quedan.
+const REBALANCE_CODE = 4011;
+
+function rebalance(moves) {
+  const movable = [...clients.values()]
+    .filter(c => c.view === 'canvas' && c.socket.readyState === WebSocket.OPEN)
+    .sort((a, b) => b.connectedAt - a.connectedAt);
+  for (const { coordinatorId, count } of moves) {
+    if (typeof coordinatorId !== 'string' || coordinatorId === COORDINATOR_ID) continue;
+    const batch = movable.splice(0, Math.max(0, Number(count) || 0));
+    if (!batch.length) continue;
+    log('BALANCE', `El directorio pide repartir carga: ${batch.length} jugador(es) del lobby → ${coordinatorId} (${batch.map(c => c.username).join(', ')})`);
+    for (const c of batch) c.socket.close(REBALANCE_CODE, `move:${coordinatorId}`);
+  }
+}
+
+module.exports = { handleUpgrade, rebalance };

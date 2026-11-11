@@ -22,7 +22,7 @@ flowchart LR
         CX["coord-x :5001"]
     end
 
-    CA -- "heartbeat + /coordinators cada 2 s" --> AUTH
+    CA -- "heartbeat + /coordinators cada 1 s" --> AUTH
     CB --> AUTH
     CX --> AUTH
     CA <-- "mesh wss://…/peer" --> CB
@@ -32,10 +32,11 @@ flowchart LR
     J -- "2. wss://…/connect" --> CB
 ```
 
-- **El auth-service es el directorio.** Cada coordinador se anuncia con `POST /heartbeat` cada 2 s y pregunta por los demás con `GET /coordinators`. Si alguno deja de latir durante 6 s, se descarta.
+- **El auth-service es el directorio.** Cada coordinador se anuncia con `POST /heartbeat` cada 1 s y pregunta por los demás con `GET /coordinators`. Si alguno deja de latir durante 3 s, se descarta. Si se cierra con Ctrl+C, se despide con `POST /leave` y sale al instante.
 - **Un solo puerto por coordinador.** Los jugadores entran por `/connect` y los demás coordinadores por `/peer`, en el mismo puerto. Por eso **cada coordinador necesita un único túnel de ngrok**.
 - **La mesh es completa.** Cada coordinador se enlaza con todos los demás. Entre cada par, el de id menor (orden alfabético) abre la conexión.
 - **Balanceo de carga.** `GET /coordinator` devuelve el coordinador con menos jugadores y reparte los empates por turnos. Por ejemplo, 10 jugadores y 2 coordinadores quedan 5 y 5.
+- **Rebalanceo.** Cuando entra o sale un coordinador, el directorio recalcula las cargas y mueve jugadores del lobby (cierre `4011`) para volver a repartir en 1–2 s. Los que están dentro de una sala no se mueven.
 - **Salas.** Una sala vive en el coordinador de quien la creó (su *anfitrión*), pero se ve desde todos. Quien entra a jugar u observar desde otro coordinador se cambia solo al anfitrión.
 
 ---
@@ -150,12 +151,12 @@ Es el mismo comando con otro id:
 node index.js --id coord-x --port 5001 --ngrok
 ```
 
-En unos 2 s:
+En 1 o 2 s:
 
 1. El auth lo registra: `[DIRECTORY] Coordinador registrado: coord-x (wss://…)`.
 2. Los demás lo ven en su próximo `GET /coordinators`. Entre cada par, el de id menor abre el enlace: `[MESH] Enlace establecido con coord-x`.
 3. Al enlazarse, se mandan los jugadores y **todas las salas**, así el nuevo queda al día.
-4. Desde ese momento el balanceador ya le envía jugadores nuevos.
+4. El directorio **rebalancea**: le pasa jugadores del lobby de los coordinadores más cargados hasta igualar.
 
 No hay que reiniciar nada ni editar listas de pares.
 
@@ -168,9 +169,9 @@ No hay que reiniciar nada ni editar listas de pares.
 | Alguien en `coord-a` crea una sala | La sala queda alojada en `coord-a` y se replica a todos. Los lobbies de todos los coordinadores la muestran con la etiqueta "Alojada en coord-a". |
 | Alguien en `coord-b` entra a esa sala | El lobby abre `game.html?sala=…&coord=coord-a`. El cliente pide `GET /coordinator?prefer=coord-a` y se conecta a `coord-a`. Si por algún motivo llega a `coord-b`, este cierra con `4010 host:coord-a` y el cliente se cambia solo. |
 | Observar una partida | Funciona igual: el observador también se cambia al anfitrión. |
-| Se cae el anfitrión | En unos 6 s el directorio lo descarta. El líder (el coordinador vivo con id menor) **adopta** la sala con su estado completo. Los jugadores se reconectan solos y terminan en el nuevo anfitrión. |
+| Se cae el anfitrión | El directorio lo descarta al instante si fue Ctrl+C (`/leave`) o en 3 s si se colgó. El líder (el coordinador vivo con id menor) **adopta** la sala con su estado completo. Los jugadores se reconectan solos y terminan en el nuevo anfitrión. |
 | Sala vacía | Si nadie se une durante 60 s, el anfitrión la borra en todos los coordinadores. Una partida sin nadie conectado se borra a los 90 s. |
-| Lobby | Cada jugador va al coordinador con menos carga. |
+| Lobby | Cada jugador va al coordinador con menos carga. Si entra o sale un coordinador, se rebalancea solo. |
 
 ---
 
@@ -213,7 +214,7 @@ Luego arranquen los coordinadores **sin** `--ngrok`: cada uno encuentra solo el 
 | `credencial de coordinador inválida` | `JWT_SECRET` distinto. | Copien el mismo secreto en todos los `.env`. |
 | `conexión a sí mismo (dos coordinadores con el mismo id)` | Dos personas usan el mismo `--id`. | Ids únicos: `coord-<nombre>`. |
 | "Directorio: sin conexión" | `AUTH_URL` mal escrita o el túnel del auth está caído. | Revisen `--auth-url` y que `https://<auth>/health` responda. |
-| Un coordinador aparece y desaparece | La PC se suspende o la red corta los heartbeats (TTL de 6 s). | Desactiven la suspensión o suban `HEARTBEAT_TTL_MS` en el auth. |
+| Un coordinador aparece y desaparece | La PC se suspende, o ngrok o la red retrasan los heartbeats más de 3 s (TTL). | Desactiven la suspensión. Si la conexión es lenta, suban `HEARTBEAT_TTL_MS=6000` en `auth-service/.env`. |
 | El navegador muestra la advertencia de ngrok | Visitas directas a la URL del auth o de un coordinador. | Es normal. El juego envía `ngrok-skip-browser-warning` en todas sus peticiones. |
 
 ---
@@ -229,4 +230,4 @@ Luego arranquen los coordinadores **sin** `--ngrok`: cada uno encuentra solo el 
 | `--peer-url` / `PEER_URL` | `<publicUrl>/peer` | URL a la que se conectan los otros coordinadores. |
 | `--ngrok` / `NGROK=1` | apagado | Lanza `ngrok http <puerto>` automáticamente. |
 | `--no-panel` / `OPEN_PANEL=0` | se abre | No abrir el panel en el navegador. |
-| `MAX_ROOMS`, `ROOM_EMPTY_MS`, `ROOM_ABANDON_MS`, `ORPHAN_GRACE_MS` | `24`, `60000`, `90000`, `4000` | Límite de salas y tiempos de limpieza y adopción. |
+| `MAX_ROOMS`, `ROOM_EMPTY_MS`, `ROOM_ABANDON_MS`, `ORPHAN_GRACE_MS` | `24`, `60000`, `90000`, `2000` | Límite de salas y tiempos de limpieza y adopción. |
