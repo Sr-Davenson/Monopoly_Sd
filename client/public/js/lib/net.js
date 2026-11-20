@@ -44,7 +44,8 @@
   async function fetchProgress(token) {
     const res = await AuthApi.request('/me/progress', { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.data.stats;
+    // { stats (globales), themes: { tema_x: {...} }, prefs }
+    return res.data;
   }
 
   // opts = {

@@ -15,7 +15,9 @@ const { WebSocketServer, WebSocket } = require('ws');
 const { config } = require('./config');
 const { clients, world, rooms, log, send, sendRaw } = require('./state');
 const { MonopolyGame, GameError } = require('../game/monopoly');
-const { findTheme, findSkin, starterSkin, isUnlocked } = require('../game/themes');
+const { findTheme, findSkin, starterSkin, findDice, isSkinUnlocked, isDiceUnlocked } = require('../game/themes');
+
+const CHAT_MIN_INTERVAL_MS = 600;   // anti-spam por usuario
 const broadcast = require('./broadcast');
 const mesh = require('./mesh');
 const roomSvc = require('./rooms');
@@ -227,20 +229,32 @@ const handlers = {
     if (!room) return send(ws, 'game_error', { message: 'Entra a una sala desde el lobby' });
 
     try {
+      if (data.action === 'chat') {
+        const now = Date.now();
+        const c = clients.get(userId);
+        if (c && c.lastChat && now - c.lastChat < CHAT_MIN_INTERVAL_MS) throw new GameError('Más despacio: espera un momento antes de enviar otro mensaje');
+        if (c) c.lastChat = now;
+      }
+
       if (data.action === 'join') {
         // Un jugador solo puede estar en una sala activa a la vez.
         const other = roomSvc.activeRoomOf(userId, room);
         if (other) throw new GameError(`Ya estás en la ${other.name}. Sal de allá primero.`);
 
-        // La ficha elegida debe estar desbloqueada (misiones).
+        // La ficha y el dado elegidos deben estar desbloqueados (misiones).
         const theme = findTheme(data.themeId);
         if (!theme) throw new GameError('Temática inválida');
         const skin = data.skinId ? findSkin(theme, data.skinId) : starterSkin(theme);
         if (!skin) throw new GameError('Esa ficha no pertenece a la temática elegida');
-        if (!skin.starter) {
+        const dice = findDice(data.diceId);
+        if (!dice) throw new GameError('Dado inválido');
+        if (!skin.starter || !dice.dice.starter) {
           const progress = await roomSvc.fetchProgress(clients.get(userId) ? clients.get(userId).token : '');
-          if (!isUnlocked(skin, progress)) {
-            throw new GameError(`Aún no desbloqueas "${skin.name}". Misión: ${skin.unlock.text}.`);
+          if (!isSkinUnlocked(theme, skin, progress)) {
+            throw new GameError(`Aún no desbloqueas "${skin.name}". Misión: ${skin.unlock.text} (y liberar antes las fichas anteriores de su grupo).`);
+          }
+          if (!isDiceUnlocked(dice.dice.id, progress)) {
+            throw new GameError(`Aún no desbloqueas "${dice.dice.name}". Misión: ${dice.dice.unlock.text}.`);
           }
         }
       }

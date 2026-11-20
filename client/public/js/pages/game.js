@@ -18,9 +18,11 @@ let conn = null;            // conexión con el coordinador (net.js)
 let config = null;          // tablero, temáticas, economía (estático)
 let state = null;           // estado de la partida de ESTA sala (lo manda el servidor)
 let myId = null;
-let progress = null;        // estadísticas del usuario (misiones)
+let progress = null;        // progreso del usuario: { stats, themes, prefs }
 let selectedTheme = null;
 let selectedSkin = null;
+let selectedColor = null;
+let selectedDice = null;
 let selectedSpace = null;
 let lastRollT = 0;
 let lastCardSeq = 0;
@@ -82,9 +84,17 @@ function tokenOf(skin, size, color) {
   return Tokens.node(skin, size, color);
 }
 
+// Desbloqueos (misma regla que valida el coordinador: por grupo y en orden)
+function themeOfSkin(skin) {
+  return config.themes.find(t => t.skins.some(s => s.id === skin.id)) || null;
+}
 function isUnlocked(skin) {
   if (skin.starter || !skin.unlock) return true;
-  return !!progress && Number(progress[skin.unlock.stat] || 0) >= skin.unlock.count;
+  const theme = themeOfSkin(skin);
+  return !!theme && Collection.skinUnlocked(theme, theme.skins.find(s => s.id === skin.id), progress);
+}
+function isDiceUnlocked(diceId) {
+  return Collection.diceUnlocked(config, diceId, progress);
 }
 
 // ── Consultas sobre el estado ────────────────────────────────────────────────
@@ -108,6 +118,31 @@ function ownedBy(id) {
 function unmortgageCost(space) {
   const e = config.economy;
   return Math.ceil(space.price * e.mortgageRate * (1 + e.unmortgageInterest));
+}
+
+// Renta que cobra AHORA una casilla con dueño (lo mismo que calcula el servidor).
+//   → { row, value, text } · row identifica la fila de la tabla de rentas activa
+function currentRent(s) {
+  const prop = state.properties[s.id];
+  if (!prop || !prop.ownerId) return null;
+  if (prop.mortgaged) return { row: 'mortgaged', value: 0, text: 'Hipotecada' };
+  const e = config.economy;
+  if (s.type === 'property') {
+    if (prop.level > 0) return { row: `l${prop.level}`, value: s.rents[prop.level], text: money(s.rents[prop.level]) };
+    const full = groupSpaces(s.group).every(g => state.properties[g.id].ownerId === prop.ownerId);
+    const v = s.rents[0] * (full ? (e.groupRentMultiplier || 2) : 1);
+    return { row: full ? 'full' : 'l0', value: v, text: money(v) };
+  }
+  const n = config.spaces.filter(x => x.type === s.type && state.properties[x.id] && state.properties[x.id].ownerId === prop.ownerId).length;
+  if (s.type === 'transport') {
+    const v = e.transportRents[n - 1];
+    return { row: `n${n}`, value: v, text: money(v) };
+  }
+  if (s.type === 'service') {
+    const m = e.serviceMultipliers[n - 1];
+    return { row: `n${n}`, value: null, text: `dados × ${m}` };
+  }
+  return null;
 }
 
 // ── Tablero ──────────────────────────────────────────────────────────────────
@@ -191,7 +226,12 @@ function renderBoard() {
     }
 
     if (s.price && !owner && !corner) parts.push(el('div', { class: 'price' }, money(s.price)));
-    else if (s.type === 'donation') parts.push(el('div', { class: 'price' }, money(s.amount)));
+    else if (owner) {
+      // Con dueño: se resalta la renta que se cobra ahora mismo
+      const r = currentRent(s);
+      if (r) parts.push(el('div', { class: `rent-tag ${r.row === 'mortgaged' ? 'off' : ''}`, title: `Renta actual de ${s.name}` },
+        r.row === 'mortgaged' ? 'Sin renta' : r.text));
+    } else if (s.type === 'donation') parts.push(el('div', { class: 'price' }, money(s.amount)));
 
     // La franja de color va aparte (pegada al borde interior); el resto en .sbody
     const strip = parts[0] && parts[0].classList.contains('strip') ? parts.shift() : null;
@@ -393,7 +433,112 @@ function renderTokens(turnId) {
   placeTokens();
 }
 
-window.addEventListener('resize', () => { if (state && config) placeTokens(); });
+// ── Tablero expansivo: zoom con la rueda y desplazamiento arrastrando ────────
+// El tablero (#board) mide lo mismo que el área visible (rectangular, se ajusta
+// a la ventana) con un mínimo para que las casillas se lean. #board-stage se
+// escala y se traslada con transform: las fichas usan offsetLeft/Top dentro
+// del tablero, así que no se ven afectadas por el zoom.
+const BoardView = (() => {
+  const MIN_W = 1000, MIN_H = 640, MAX_ZOOM = 3.5;
+  const vp = $('board-viewport');
+  const stage = $('board-stage');
+  let W = 0, H = 0, scale = 1, tx = 0, ty = 0, fitScale = 1;
+  let drag = null, justPanned = false;
+
+  function clamp() {
+    const vw = vp.clientWidth, vh = vp.clientHeight;
+    const sw = W * scale, sh = H * scale;
+    const margin = 80;
+    // Si cabe, se centra; si no, no se deja salir más allá de un margen
+    tx = sw <= vw ? (vw - sw) / 2 : Math.min(margin, Math.max(vw - sw - margin, tx));
+    ty = sh <= vh ? (vh - sh) / 2 : Math.min(margin, Math.max(vh - sh - margin, ty));
+  }
+
+  function apply() {
+    clamp();
+    stage.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    $('zoom-level').textContent = `${Math.round((scale / fitScale) * 100)}%`;
+    vp.classList.toggle('zoomed', scale > fitScale * 1.01);
+  }
+
+  function resize() {
+    const vw = vp.clientWidth, vh = vp.clientHeight;
+    if (!vw || !vh) return;
+    const prevFit = fitScale;
+    const wasFit = Math.abs(scale - prevFit) < 0.001;
+    // Misma proporción que el área visible (el tablero llena el rectángulo),
+    // agrandada lo justo para respetar el tamaño mínimo legible.
+    const k = Math.max(1, MIN_W / vw, MIN_H / vh);
+    W = vw * k;
+    H = vh * k;
+    stage.style.width = `${W}px`;
+    stage.style.height = `${H}px`;
+    fitScale = Math.min(vw / W, vh / H);
+    if (wasFit || scale < fitScale) scale = fitScale;
+    apply();
+    if (state && config && $('token-layer')) placeTokens();
+  }
+
+  function zoomAt(factor, cx, cy) {
+    const next = Math.min(MAX_ZOOM, Math.max(fitScale, scale * factor));
+    if (next === scale) return;
+    // Mantener fijo el punto bajo el cursor
+    tx = cx - (cx - tx) * (next / scale);
+    ty = cy - (cy - ty) * (next / scale);
+    scale = next;
+    apply();
+  }
+
+  function fit() { resize(); scale = fitScale; apply(); }
+
+  vp.addEventListener('wheel', (ev) => {
+    if (ev.target.closest('.board-hud, .event-feed')) return;
+    ev.preventDefault();
+    const r = vp.getBoundingClientRect();
+    zoomAt(Math.exp(-ev.deltaY * (ev.deltaMode === 1 ? 0.05 : 0.0015)), ev.clientX - r.left, ev.clientY - r.top);
+  }, { passive: false });
+
+  vp.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0 && ev.pointerType === 'mouse') return;
+    if (ev.target.closest('button, a, input, select, textarea, .board-hud')) return;
+    drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, tx, ty, moved: false };
+  });
+  vp.addEventListener('pointermove', (ev) => {
+    if (!drag || ev.pointerId !== drag.id) return;
+    const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    if (!drag.moved) { drag.moved = true; vp.setPointerCapture(ev.pointerId); vp.classList.add('panning'); }
+    tx = drag.tx + dx;
+    ty = drag.ty + dy;
+    apply();
+  });
+  const endDrag = (ev) => {
+    if (!drag || ev.pointerId !== drag.id) return;
+    if (drag.moved) { justPanned = true; setTimeout(() => { justPanned = false; }, 0); }
+    vp.classList.remove('panning');
+    drag = null;
+  };
+  vp.addEventListener('pointerup', endDrag);
+  vp.addEventListener('pointercancel', endDrag);
+  // Un arrastre no debe seleccionar la casilla donde se soltó el mouse
+  vp.addEventListener('click', (ev) => { if (justPanned) { ev.stopPropagation(); ev.preventDefault(); } }, true);
+  vp.addEventListener('dblclick', (ev) => { if (!ev.target.closest('button, .board-hud, .actions')) fit(); });
+
+  const center = () => [vp.clientWidth / 2, vp.clientHeight / 2];
+  $('zoom-in').addEventListener('click', () => zoomAt(1.3, ...center()));
+  $('zoom-out').addEventListener('click', () => zoomAt(1 / 1.3, ...center()));
+  $('zoom-fit').addEventListener('click', fit);
+  window.addEventListener('keydown', (ev) => {
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName) || $('game-area').hidden) return;
+    if (ev.key === '+' || ev.key === '=') zoomAt(1.2, ...center());
+    else if (ev.key === '-') zoomAt(1 / 1.2, ...center());
+    else if (ev.key === '0') fit();
+  });
+  if (window.ResizeObserver) new ResizeObserver(() => resize()).observe(vp);
+  window.addEventListener('resize', resize);
+
+  return { fit, resize };
+})();
 
 // ── Centro: turno, dados y acciones ──────────────────────────────────────────
 function renderCenter() {
@@ -405,7 +550,8 @@ function renderCenter() {
     const w = state.winnerId && playerById(state.winnerId);
     info.replaceChildren(el('strong', {}, w ? `🏆 ¡${w.username} gana la partida!` : 'Partida terminada'));
     if (state.hostId === myId) actions.append(el('button', { class: 'btn btn-success', onclick: () => act('restart') }, 'Nueva partida'));
-    $('die-1').textContent = '–'; $('die-2').textContent = '–';
+    renderDice(null, null);
+    $('charge-now').hidden = true;
     renderPot();
     return;
   }
@@ -418,16 +564,15 @@ function renderCenter() {
     current.connected ? '' : ' (desconectado)'
   );
 
-  const [d1, d2] = t.dice || ['–', '–'];
-  $('die-1').textContent = d1;
-  $('die-2').textContent = d2;
+  renderDice(current, t.dice);
   const rollEntry = [...state.log].reverse().find(l => l.text.includes(' sacó '));
   if (rollEntry && rollEntry.t !== lastRollT) {
     lastRollT = rollEntry.t;
-    for (const d of [$('die-1'), $('die-2')]) {
+    for (const d of $('dice-row').querySelectorAll('.die')) {
       d.classList.remove('rolling'); void d.offsetWidth; d.classList.add('rolling');
     }
   }
+  renderChargeNow(t);
 
   const mine = me();
   if (!mine) {
@@ -468,6 +613,66 @@ function renderCenter() {
   }
 
   renderPot();
+}
+
+// Dados con la skin del jugador en turno (se reutilizan los nodos para que la
+// animación de tirada no se corte)
+function renderDice(player, dice) {
+  const row = $('dice-row');
+  const style = player && player.dice ? player.dice.style : (config.defaultDice && config.defaultDice.style);
+  while (row.children.length < 2) row.append(Collection.dieNode(style, null));
+  [...row.children].forEach((node, i) => {
+    Collection.applyDiceStyle(node, style);
+    const v = dice ? dice[i] : null;
+    if (node.dataset.value !== String(v || '')) Collection.setDieValue(node, v);
+  });
+  row.title = player && player.dice ? `${player.dice.name} de ${player.username}` : '';
+}
+
+// Lo que se está cobrando AHORA en este turno (renta, impuesto, multa, compra
+// o deuda), bien visible en el centro del tablero.
+function renderChargeNow(t) {
+  const box = $('charge-now');
+  const current = playerById(t.playerId);
+  let view = null;
+  if (t.stage === 'debt' && t.debt) {
+    view = { kind: 'debt', icon: '⚠', label: `${current.username} debe pagar`, amount: t.debt.total, sub: 'Vende construcciones, hipoteca o declárate en bancarrota' };
+  } else if (t.stage === 'buy' && t.pendingBuy !== null) {
+    const s = config.spaces[t.pendingBuy];
+    view = { kind: 'buy', icon: '🏷', label: `${s.name} está a la venta`, amount: s.price, sub: `Renta base ${money(s.rents ? s.rents[0] : 0)}` };
+  } else {
+    // Último cobro registrado desde que empezó este turno
+    const start = state.log.map(l => l.text).lastIndexOf(`Turno de ${current.username}`);
+    const since = start >= 0 ? state.log.slice(start + 1) : [];
+    for (let i = since.length - 1; i >= 0 && !view; i--) {
+      const text = since[i].text;
+      let m;
+      if ((m = /^(.+) debe pagar (\d+) de renta a (.+)$/.exec(text))) {
+        view = { kind: 'rent', icon: '💸', label: `${m[1]} paga renta a ${m[3]}`, amount: Number(m[2]), sub: 'Renta cobrada en este turno' };
+      } else if ((m = /^(.+) pagó (\d+) y sale del calabozo$/.exec(text)) || (m = /^(.+) cumplió \d+ turnos y paga la multa de (\d+)$/.exec(text))) {
+        view = { kind: 'fine', icon: '⛓', label: `${m[1]} paga la multa`, amount: Number(m[2]), sub: 'Calabozo' };
+      } else if ((m = /^(.+) compró (.+) por (\d+)$/.exec(text))) {
+        view = { kind: 'bought', icon: '🏠', label: `${m[1]} compró ${m[2]}`, amount: Number(m[3]), sub: 'Pagado al banco' };
+      }
+    }
+    if (!view) {
+      const s = config.spaces[current.position];
+      if (s && s.type === 'donation' && since.some(l => l.text === `${current.username} cae en ${s.name}`)) {
+        view = { kind: 'fine', icon: '♥', label: `${current.username} dona al Fondo`, amount: s.amount, sub: s.name };
+      }
+    }
+  }
+  box.hidden = !view;
+  if (!view) return;
+  box.dataset.kind = view.kind;
+  box.style.setProperty('--player-color', current.color);
+  box.replaceChildren(
+    el('span', { class: 'charge-icon', 'aria-hidden': 'true' }, view.icon),
+    el('div', { class: 'charge-text' },
+      el('div', { class: 'charge-label' }, view.label),
+      el('div', { class: 'charge-amount' }, money(view.amount)),
+      el('div', { class: 'charge-sub' }, view.sub))
+  );
 }
 
 function renderPot() {
@@ -534,20 +739,22 @@ function renderSpaceDetail() {
   const member = s.memberId ? memberById(s.memberId) : null;
   const e = config.economy;
   const rows = [];
-  const row = (k, v) => rows.push(el('tr', {}, el('td', {}, k), el('td', {}, v)));
+  const active = currentRent(s);
+  const row = (k, v, key) => rows.push(el('tr', { class: active && key && active.row === key ? 'rent-active' : '' },
+    el('td', {}, k), el('td', {}, v, active && key && active.row === key ? el('span', { class: 'rent-now' }, ' ← se cobra') : '')));
 
   if (s.price) row('Precio', money(s.price));
   if (s.type === 'property') {
     const g = config.groups[s.group];
     row('Grupo', g.name);
-    row('Renta base', money(s.rents[0]));
-    row('Con grupo completo', money(s.rents[0] * 2));
-    for (let i = 1; i <= 4; i++) row(`${i} casa${i > 1 ? 's' : ''}`, money(s.rents[i]));
-    row('Hotel', money(s.rents[5]));
+    row('Renta base', money(s.rents[0]), 'l0');
+    row('Con grupo completo', money(s.rents[0] * (e.groupRentMultiplier || 2)), 'full');
+    for (let i = 1; i <= 4; i++) row(`${i} casa${i > 1 ? 's' : ''}`, money(s.rents[i]), `l${i}`);
+    row('Hotel', money(s.rents[5]), 'l5');
     row('Costo por construcción', money(s.houseCost));
   }
-  if (s.type === 'transport') e.transportRents.forEach((r, i) => row(`Con ${i + 1} transporte${i ? 's' : ''}`, money(r)));
-  if (s.type === 'service') e.serviceMultipliers.forEach((m, i) => row(`Con ${i + 1} servicio${i ? 's' : ''}`, `dados × ${m}`));
+  if (s.type === 'transport') e.transportRents.forEach((r, i) => row(`Con ${i + 1} transporte${i ? 's' : ''}`, money(r), `n${i + 1}`));
+  if (s.type === 'service') e.serviceMultipliers.forEach((m, i) => row(`Con ${i + 1} servicio${i ? 's' : ''}`, `dados × ${m}`, `n${i + 1}`));
   if (s.price) row('Valor de hipoteca', money(Math.floor(s.price * e.mortgageRate)));
   if (s.type === 'donation') row('Donación', `${money(s.amount)} al Fondo`);
   if (prop) {
@@ -564,6 +771,85 @@ function renderSpaceDetail() {
     rows.length ? el('table', {}, el('tbody', {}, rows)) : ''
   );
 }
+
+// ── La mesa: títulos de propiedad de cada jugador ────────────────────────────
+// Cada propiedad comprada aparece como una carta (al estilo de los títulos del
+// Monopoly) con el estilo de la temática de su sección. La fila de renta que se
+// cobra ahora va resaltada.
+let dealtCards = null;   // "spaceId:ownerId" ya mostradas (para animar las nuevas)
+
+function deedRows(s) {
+  const e = config.economy;
+  if (s.type === 'property') {
+    return [
+      ['l0', 'Renta', s.rents[0]],
+      ['full', 'Grupo completo', s.rents[0] * (e.groupRentMultiplier || 2)],
+      ['l1', '1 casa', s.rents[1]], ['l2', '2 casas', s.rents[2]], ['l3', '3 casas', s.rents[3]], ['l4', '4 casas', s.rents[4]],
+      ['l5', 'Hotel', s.rents[5]]
+    ].map(([k, label, v]) => [k, label, money(v)]);
+  }
+  if (s.type === 'transport') return e.transportRents.map((r, i) => [`n${i + 1}`, `${i + 1} transporte${i ? 's' : ''}`, money(r)]);
+  if (s.type === 'service') return e.serviceMultipliers.map((m, i) => [`n${i + 1}`, `${i + 1} servicio${i ? 's' : ''}`, `dados × ${m}`]);
+  return [];
+}
+
+function deedCard(s, isNew) {
+  const prop = state.properties[s.id];
+  const member = s.memberId ? memberById(s.memberId) : null;
+  const rent = currentRent(s);
+  const color = s.type === 'property' ? config.groups[s.group].color : (member ? member.color : '#64748b');
+  const kind = s.type === 'property' ? 'Título de propiedad' : s.type === 'transport' ? 'Transporte' : 'Servicio';
+  const card = el('button', {
+    type: 'button',
+    class: `deed deed-${member ? member.id : 'neutral'} ${prop.mortgaged ? 'mortgaged' : ''} ${isNew ? 'dealt' : ''} ${selectedSpace === s.id ? 'selected' : ''}`,
+    '--group-color': color,
+    title: `${s.name} — renta actual: ${rent ? rent.text : '—'}`,
+    onclick: () => { selectedSpace = s.id; render(); }
+  },
+    el('div', { class: 'deed-head' },
+      el('span', { class: 'deed-kind' }, kind),
+      el('span', { class: 'deed-name' }, s.icon ? `${s.icon} ` : '', s.name)),
+    el('div', { class: 'deed-now' },
+      el('span', {}, prop.mortgaged ? 'Hipotecada' : 'Cobra ahora'),
+      el('strong', {}, prop.mortgaged ? '—' : rent ? rent.text : '—')),
+    el('table', { class: 'deed-rents' }, el('tbody', {}, deedRows(s).map(([k, label, v]) =>
+      el('tr', { class: rent && rent.row === k ? 'on' : '' }, el('td', {}, label), el('td', {}, v))))),
+    prop.level > 0 ? el('div', { class: 'deed-build' }, prop.level === 5 ? '🏨 Hotel' : '🏠'.repeat(prop.level)) : '',
+    el('div', { class: 'deed-foot' }, member ? member.world : '', s.price ? ` · ${money(s.price)}` : '')
+  );
+  return card;
+}
+
+function renderTableCards() {
+  const box = $('table-cards');
+  const seen = new Set();
+  const seats = state.players.filter(p => !p.bankrupt || ownedBy(p.id).length).map(p => {
+    const rank = (s) => (s.type === 'property' ? 0 : s.type === 'transport' ? 100 : 200) + s.id;
+    const props = ownedBy(p.id).sort((a, b) => rank(a) - rank(b));
+    const cards = props.map(s => {
+      const key = `${s.id}:${p.id}`;
+      seen.add(key);
+      return deedCard(s, dealtCards !== null && !dealtCards.has(key));
+    });
+    return el('div', { class: `tseat ${p.id === myId ? 'is-me' : ''} ${state.turn && state.turn.playerId === p.id ? 'turn' : ''}`, '--player-color': p.color },
+      el('div', { class: 'seat-head' },
+        tokenOf(p.skin, 'sm', p.color),
+        el('strong', {}, p.username, p.id === myId ? ' (tú)' : ''),
+        el('span', { class: 'seat-money' }, money(p.money)),
+        el('span', { class: 'seat-count' }, `${props.length} título${props.length === 1 ? '' : 's'}`)),
+      el('div', { class: 'seat-cards' }, cards.length ? cards : el('div', { class: 'seat-empty' }, 'Sin títulos todavía')));
+  });
+  dealtCards = seen;
+  box.replaceChildren(...seats);
+}
+
+$('table-toggle').addEventListener('click', () => {
+  const wrap = $('table-cards').parentElement;
+  const hidden = wrap.classList.toggle('collapsed');
+  $('table-toggle').textContent = hidden ? 'Mostrar' : 'Ocultar';
+  $('table-toggle').setAttribute('aria-expanded', String(!hidden));
+  requestAnimationFrame(() => BoardView.fit());
+});
 
 // ── Panel: mis propiedades (construir, vender, hipotecar) ────────────────────
 function renderMyProps() {
@@ -669,6 +955,17 @@ function closeTradeWindow() {
   $('trade-window').hidden = true;
 }
 
+const toSet = (side) => ({ money: side.money || 0, properties: new Set(side.properties || []), jailCards: side.jailCards || 0 });
+const sidePayload = (s) => ({ money: s.money, properties: [...s.properties], jailCards: s.jailCards });
+
+// Empieza una contraoferta: parte de la oferta recibida con los lados invertidos
+// (lo que me piden pasa a ser lo que ofrezco y viceversa) para ajustarla.
+function startCounter(t) {
+  tradeDraft = { toId: t.fromId, counterOf: t.id, offer: toSet(t.request), request: toSet(t.offer) };
+  tradeWin.mode = 'counter';
+  buildTradeWindow();
+}
+
 function buildTradeWindow() {
   const body = $('trade-win-body');
   const title = $('trade-win-title');
@@ -677,12 +974,16 @@ function buildTradeWindow() {
   if (tradeWin.mode === 'offer' && t) {
     const from = playerById(t.fromId), to = playerById(t.toId);
     tradeWin.tradeId = t.id;
-    title.textContent = t.toId === myId ? `Oferta de ${from.username}` : `Tu oferta a ${to.username}`;
+    const isCounter = t.round > 0;
+    title.textContent = t.toId === myId
+      ? `${isCounter ? 'Contraoferta' : 'Oferta'} de ${from.username}`
+      : `Tu ${isCounter ? 'contraoferta' : 'oferta'} a ${to.username}`;
     const actions = el('div', { class: 'trade-actions' });
     if (t.toId === myId) {
       actions.append(
-        el('button', { class: 'btn btn-success', onclick: () => act('trade_respond', { tradeId: t.id, accept: true }) }, 'Aceptar'),
-        el('button', { class: 'btn btn-danger', onclick: () => act('trade_respond', { tradeId: t.id, accept: false }) }, 'Rechazar')
+        el('button', { class: 'btn btn-success', onclick: () => act('trade_respond', { tradeId: t.id, accept: true }) }, '✔ Aceptar'),
+        el('button', { class: 'btn btn-warning', onclick: () => startCounter(t), title: 'Proponer otros términos: puedes añadir o quitar propiedades y dinero' }, '↺ Contraoferta'),
+        el('button', { class: 'btn btn-danger', onclick: () => act('trade_respond', { tradeId: t.id, accept: false }) }, '✖ Rechazar')
       );
     } else if (t.fromId === myId) {
       actions.append(
@@ -691,6 +992,7 @@ function buildTradeWindow() {
       );
     }
     body.replaceChildren(
+      isCounter ? el('div', { class: 'trade-round' }, `↺ Contraoferta n.º ${t.round}`) : '',
       el('div', { class: 'trade-compare' },
         sideView('Entrega', from, t.offer),
         el('div', { class: 'trade-arrows', 'aria-hidden': 'true' }, '⇄'),
@@ -701,20 +1003,29 @@ function buildTradeWindow() {
     return;
   }
 
-  // Modo proponer
-  title.textContent = 'Proponer intercambio';
+  // Modo proponer o contraofertar: formulario
+  const counter = tradeWin.mode === 'counter';
+  if (counter && (!t || t.toId !== myId)) { closeTradeWindow(); return; }
+  title.textContent = counter ? `Contraoferta a ${playerById(t.fromId).username}` : 'Proponer intercambio';
   const mine = me();
   const others = state.players.filter(p => !p.bankrupt && p.id !== myId);
-  if (!others.find(p => p.id === tradeDraft.toId)) tradeDraft = { ...emptyDraft(), toId: others[0] ? others[0].id : '' };
+  if (counter) {
+    if (tradeDraft.counterOf !== t.id) { startCounter(t); return; }
+  } else if (!others.find(p => p.id === tradeDraft.toId) || tradeDraft.counterOf) {
+    tradeDraft = { ...emptyDraft(), toId: others[0] ? others[0].id : '' };
+  }
   const target = playerById(tradeDraft.toId);
   if (!mine || !target) { body.replaceChildren(el('p', { class: 'text-muted' }, 'No hay con quién intercambiar.')); return; }
 
-  const targets = el('div', { class: 'trade-targets' }, others.map(p =>
-    el('button', {
-      type: 'button', class: 'trade-target', 'aria-pressed': String(p.id === tradeDraft.toId), '--player-color': p.color,
-      onclick: () => { tradeDraft = { ...emptyDraft(), toId: p.id }; buildTradeWindow(); }
-    }, tokenOf(p.skin, 'sm', p.color), el('span', {}, p.username), el('small', {}, money(p.money)))
-  ));
+  const targets = counter
+    ? el('div', { class: 'trade-targets' }, el('span', { class: 'trade-target', 'aria-pressed': 'true', '--player-color': target.color },
+        tokenOf(target.skin, 'sm', target.color), el('span', {}, target.username), el('small', {}, money(target.money))))
+    : el('div', { class: 'trade-targets' }, others.map(p =>
+      el('button', {
+        type: 'button', class: 'trade-target', 'aria-pressed': String(p.id === tradeDraft.toId), '--player-color': p.color,
+        onclick: () => { tradeDraft = { ...emptyDraft(), toId: p.id }; buildTradeWindow(); }
+      }, tokenOf(p.skin, 'sm', p.color), el('span', {}, p.username), el('small', {}, money(p.money)))
+    ));
 
   const column = (heading, owner, side) => {
     const props = ownedBy(owner.id).filter(isTradeable);
@@ -735,50 +1046,71 @@ function buildTradeWindow() {
     );
   };
 
+  const send = () => {
+    if (counter) {
+      act('trade_counter', { tradeId: t.id, offer: sidePayload(tradeDraft.offer), request: sidePayload(tradeDraft.request) });
+    } else {
+      act('trade_propose', { toId: tradeDraft.toId, offer: sidePayload(tradeDraft.offer), request: sidePayload(tradeDraft.request) });
+    }
+    tradeDraft = emptyDraft();
+    tradeWin.mode = 'offer';   // se mostrará la oferta enviada cuando llegue el estado
+  };
+
   body.replaceChildren(
-    el('div', { class: 'trade-label' }, 'Con quién'),
+    el('div', { class: 'trade-label' }, counter ? 'Contraoferta para' : 'Con quién'),
     targets,
+    counter ? el('p', { class: 'small text-muted' }, 'Ajusta los términos: añade o quita propiedades, dinero o cartas de ambos lados.') : '',
     el('div', { class: 'trade-cols' },
-      column('Tú ofreces', mine, tradeDraft.offer),
+      column(counter ? 'Tú entregas' : 'Tú ofreces', mine, tradeDraft.offer),
       column(`Pides a ${target.username}`, target, tradeDraft.request)),
     el('div', { class: 'trade-actions' },
-      el('button', { class: 'btn', type: 'button', onclick: () => {
-        const side = s => ({ money: s.money, properties: [...s.properties], jailCards: s.jailCards });
-        act('trade_propose', { toId: tradeDraft.toId, offer: side(tradeDraft.offer), request: side(tradeDraft.request) });
-        tradeDraft = emptyDraft();
-      } }, 'Enviar oferta'),
-      el('button', { class: 'btn btn-ghost', type: 'button', onclick: closeTradeWindow }, 'Cerrar')
+      el('button', { class: 'btn', type: 'button', onclick: send }, counter ? '↺ Enviar contraoferta' : 'Enviar oferta'),
+      counter
+        ? el('button', { class: 'btn btn-ghost', type: 'button', onclick: () => { tradeDraft = emptyDraft(); tradeWin.mode = 'offer'; buildTradeWindow(); } }, '← Volver a la oferta')
+        : el('button', { class: 'btn btn-ghost', type: 'button', onclick: closeTradeWindow }, 'Cerrar')
     )
   );
 }
 
-function renderTrade() {
-  const summary = $('trade-summary');
+// Botón de intercambio arriba a la izquierda del tablero
+function renderTradeButton() {
+  const btn = $('trade-btn');
+  const hint = $('trade-hint');
   const t = state.phase === 'playing' ? state.trade : null;
-
-  // Panel lateral: resumen + botón para abrir la ventana
+  const mine = me();
+  btn.hidden = !mine || mine.bankrupt || state.phase !== 'playing';
+  btn.classList.remove('has-offer');
   if (t) {
     const from = playerById(t.fromId), to = playerById(t.toId);
-    const mineInvolved = t.fromId === myId || t.toId === myId;
-    summary.replaceChildren(
-      el('div', {}, el('strong', {}, from.username), ' ⇄ ', el('strong', {}, to.username), ': oferta pendiente'),
-      mineInvolved ? el('button', { class: 'btn btn-small', type: 'button', onclick: () => openTradeWindow('offer') }, 'Ver oferta') : ''
-    );
-  } else if (canPropose()) {
-    summary.replaceChildren(el('button', { class: 'btn btn-small', type: 'button', onclick: () => openTradeWindow('propose') }, '⇄ Proponer intercambio'));
+    const involved = t.fromId === myId || t.toId === myId;
+    btn.disabled = !involved;
+    btn.textContent = t.toId === myId ? '⇄ ¡Tienes una oferta!' : involved ? '⇄ Ver mi oferta' : '⇄ Intercambio en curso';
+    if (t.toId === myId) btn.classList.add('has-offer');
+    hint.textContent = `${from.username} ⇄ ${to.username}${t.round ? ` · contraoferta ${t.round}` : ''}`;
+    btn.onclick = () => openTradeWindow('offer');
   } else {
-    summary.replaceChildren(el('span', { class: 'text-muted' },
-      state.phase === 'playing' ? 'Puedes proponer intercambios durante tu turno.' : 'Sin intercambios.'));
+    const ok = canPropose();
+    btn.disabled = !ok;
+    btn.textContent = '⇄ Intercambiar';
+    hint.textContent = ok ? '' : (state.phase === 'playing' ? 'Disponible en tu turno' : '');
+    btn.onclick = () => openTradeWindow('propose');
   }
+}
+
+function renderTrade() {
+  const t = state.phase === 'playing' ? state.trade : null;
+  renderTradeButton();
 
   // Ventana flotante
   const involved = t && (t.fromId === myId || t.toId === myId);
-  if (involved && t.id !== tradeWin.dismissedTradeId && !(tradeWin.open && tradeWin.mode === 'offer' && tradeWin.tradeId === t.id)) {
+  const editingCounter = tradeWin.open && tradeWin.mode === 'counter' && t && tradeDraft.counterOf === t.id;
+  if (involved && !editingCounter && t.id !== tradeWin.dismissedTradeId && !(tradeWin.open && tradeWin.mode === 'offer' && tradeWin.tradeId === t.id)) {
     openTradeWindow('offer'); // llega una oferta nueva (o la acabo de enviar)
     return;
   }
   if (!tradeWin.open) return;
-  if (tradeWin.mode === 'offer' && !t) { closeTradeWindow(); return; }
+  if ((tradeWin.mode === 'offer' || tradeWin.mode === 'counter') && !t) { closeTradeWindow(); return; }
+  if (tradeWin.mode === 'counter' && !editingCounter) { closeTradeWindow(); return; }
   if (tradeWin.mode === 'propose' && !canPropose()) { closeTradeWindow(); return; }
   // No reconstruir mientras escribe en la ventana (perdería el foco)
   if (!$('trade-window').contains(document.activeElement)) buildTradeWindow();
@@ -807,7 +1139,8 @@ function renderTrade() {
   bar.addEventListener('pointerup', end);
   bar.addEventListener('pointercancel', end);
   $('trade-win-close').addEventListener('click', () => {
-    if (tradeWin.mode === 'offer') tradeWin.dismissedTradeId = tradeWin.tradeId;
+    if ((tradeWin.mode === 'offer' || tradeWin.mode === 'counter') && state && state.trade) tradeWin.dismissedTradeId = state.trade.id;
+    if (tradeWin.mode === 'counter') tradeDraft = emptyDraft();
     closeTradeWindow();
   });
 })();
@@ -829,6 +1162,48 @@ const LOG_SOUNDS = [
   [/ no se reconectó a tiempo| quebró| quedó eliminado| se rinde/, 'expel']
 ];
 
+// Avisos grandes sobre el tablero. Cada regla: [regex, tipo, icono, (match) → texto]
+const EVENT_RULES = [
+  [/^(.+) debe pagar (\d+) de renta a (.+)$/, 'rent', '💸', m => [`${m[1]} paga renta a ${m[3]}`, money(m[2])]],
+  [/^(.+) compró (.+) por (\d+)$/, 'buy', '🏠', m => [`${m[1]} compró ${m[2]}`, money(m[3])]],
+  [/^(.+) construyó en (.+) \((.+)\)$/, 'build', '🏗', m => [`${m[1]} construyó en ${m[2]}`, m[3]]],
+  [/^(.+) pasa por Salida y cobra (\d+)$/, 'collect', '⚑', m => [`${m[1]} pasa por Salida`, `+${money(m[2])}`]],
+  [/^(.+) se lleva el Fondo de Donaciones: (\d+)$/, 'collect', '💰', m => [`${m[1]} se lleva el Fondo`, `+${money(m[2])}`]],
+  [/^(.+) toma Tarjeta (General|Especial): (.+)$/, 'card', '📜', m => [`${m[1]} · Tarjeta ${m[2]}`, m[3]]],
+  [/^(.+) va al calabozo$/, 'jail', '⛓', m => [`${m[1]} va al calabozo`, '']],
+  [/^(.+) no tiene suficiente dinero: debe (\d+)/, 'debt', '⚠', m => [`${m[1]} no puede pagar`, `Debe ${money(m[2])}`]],
+  [/^(.+) pagó su deuda de (\d+)$/, 'pay', '✔', m => [`${m[1]} pagó su deuda`, money(m[2])]],
+  [/^(.+) hipotecó (.+) por (\d+)$/, 'mortgage', '🏦', m => [`${m[1]} hipotecó ${m[2]}`, `+${money(m[3])}`]],
+  [/^(.+) aceptó el intercambio con (.+)$/, 'trade', '🤝', m => [`${m[1]} y ${m[2]} cerraron un intercambio`, '']],
+  [/^(.+) hace una contraoferta a (.+)$/, 'trade', '↺', m => [`${m[1]} contraoferta a ${m[2]}`, '']],
+  [/^(.+) propone un intercambio a (.+)$/, 'trade', '⇄', m => [`${m[1]} propone un intercambio a ${m[2]}`, '']],
+  [/^(.+) rechazó el intercambio$/, 'reject', '✖', m => [`${m[1]} rechazó el intercambio`, '']],
+  [/^(.+) quebró: sus bienes pasan a (.+)$/, 'out', '💀', m => [`${m[1]} quebró`, `Sus bienes pasan a ${m[2]}`]],
+  [/^(.+) quedó eliminado/, 'out', '💀', m => [`${m[1]} quedó eliminado`, '']],
+  [/^(.+) se rinde$/, 'out', '🏳', m => [`${m[1]} se rinde`, '']]
+];
+
+function eventFor(text) {
+  for (const [re, kind, icon, fmt] of EVENT_RULES) {
+    const m = re.exec(text);
+    if (m) { const [title, detail] = fmt(m); return { kind, icon, title, detail }; }
+  }
+  return null;
+}
+
+function showEvent(ev, player) {
+  const feed = $('event-feed');
+  const mine = player && player.id === myId;
+  const node = el('div', { class: `event-card ev-${ev.kind} ${mine ? 'is-mine' : ''}`, '--player-color': player ? player.color : 'var(--gold)' },
+    el('span', { class: 'event-icon', 'aria-hidden': 'true' }, ev.icon),
+    el('div', { class: 'event-text' },
+      el('div', { class: 'event-title' }, ev.title),
+      ev.detail ? el('div', { class: 'event-detail' }, ev.detail) : ''));
+  feed.prepend(node);
+  while (feed.children.length > 3) feed.lastChild.remove();
+  setTimeout(() => { node.classList.add('leaving'); setTimeout(() => node.remove(), 450); }, ev.kind === 'rent' || ev.kind === 'debt' ? 5500 : 4200);
+}
+
 function playerFromText(text) {
   const clean = text.replace(/^[^\p{L}\p{N}]+/u, '');
   return state.players
@@ -844,6 +1219,15 @@ function processEvents() {
 
   for (const entry of fresh) {
     const text = entry.text;
+    // Aviso visible (cuando la ficha termina de caminar, si se está moviendo)
+    const ev = eventFor(text);
+    if (ev) {
+      const who = playerFromText(text);
+      const anim = who && tokenAnim.get(who.id);
+      const fire = () => showEvent(ev, who);
+      if (anim && anim.busy) (anim.after = anim.after || []).push(fire);
+      else fire();
+    }
     if (text.includes(' sacó ') && !text.includes('dobles seguidos')) {
       const p = playerFromText(text);
       Sound.play('roll', p && p.themeId);
@@ -922,7 +1306,9 @@ function achievementKey() { return `unlocked_skins:${currentUsername}`; }
 function checkAchievements() {
   if (!config || !progress) return;
   const skins = config.themes.flatMap(t => t.skins.map(sk => ({ ...sk, themeId: t.id, themeName: t.name })));
-  const unlocked = skins.filter(sk => !sk.starter && sk.unlock && isUnlocked(sk));
+  const dice = config.themes.flatMap(t => (t.dice || []).map(d => ({ ...d, themeId: t.id, themeName: t.name, isDice: true })));
+  const unlocked = skins.filter(sk => !sk.starter && sk.unlock && isUnlocked(sk))
+    .concat(dice.filter(d => isDiceUnlocked(d.id)));
   let known = null;
   try { known = JSON.parse(localStorage.getItem(achievementKey()) || 'null'); } catch { known = null; }
   const ids = unlocked.map(sk => sk.id);
@@ -937,9 +1323,9 @@ function showAchievement(skin) {
   const color = RARITY_COLOR[skin.rarity] || '#f2c14e';
   const card = el('div', { class: 'achievement', role: 'status', '--rarity-color': color },
     el('div', { class: 'achievement-glow', 'aria-hidden': 'true' }),
-    tokenOf(skin, 'lg', color),
+    skin.isDice ? Collection.dieNode(skin.style, 6, 'die-ach') : tokenOf(skin, 'lg', color),
     el('div', { class: 'achievement-text' },
-      el('div', { class: 'achievement-kicker' }, '🏅 ¡Logro desbloqueado!'),
+      el('div', { class: 'achievement-kicker' }, skin.isDice ? '🎲 ¡Dado desbloqueado!' : '🏅 ¡Logro desbloqueado!'),
       el('div', { class: 'achievement-title' }, skin.name),
       el('div', { class: 'achievement-sub' },
         [rarity ? rarity.label : skin.rarity, skin.themeName].filter(Boolean).join(' · ')),
@@ -1018,18 +1404,73 @@ syncSoundBtn();
 
 // ── Registro ─────────────────────────────────────────────────────────────────
 function renderLog() {
-  $('log').replaceChildren(...state.log.map(l => el('li', {}, l.text)));
+  $('log').replaceChildren(...state.log.map(l => {
+    const ev = eventFor(l.text);
+    return el('li', { class: ev ? `log-${ev.kind}` : '' }, ev ? `${ev.icon} ` : '', l.text);
+  }));
 }
+
+// ── Chat de la partida ───────────────────────────────────────────────────────
+let chatSeen = null;      // id del último mensaje visto con el chat abierto
+let chatRendered = 0;
+
+function chatOpen() { return $('chat').dataset.open === 'true'; }
+
+function setChatOpen(open) {
+  $('chat').dataset.open = String(open);
+  $('chat-toggle').setAttribute('aria-expanded', String(open));
+  try { localStorage.setItem('chat_open', open ? '1' : '0'); } catch { /* sin storage */ }
+  if (open) { renderChat(true); setTimeout(() => $('chat-input').focus(), 50); }
+}
+
+function renderChat(force = false) {
+  const msgs = (state && state.chat) || [];
+  const last = msgs.length ? msgs[msgs.length - 1].id : 0;
+  if (chatSeen === null) chatSeen = last;                   // al entrar no cuenta lo viejo
+  if (chatOpen()) chatSeen = last;
+  const unread = msgs.filter(m => m.id > chatSeen && m.userId !== myId).length;
+  $('chat-unread').hidden = unread === 0;
+  $('chat-unread').textContent = unread > 9 ? '9+' : String(unread);
+  if (!force && last === chatRendered) return;
+  chatRendered = last;
+
+  const list = $('chat-list');
+  const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+  list.replaceChildren(...(msgs.length ? msgs.map(m => {
+    const time = new Date(m.t).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+    return el('li', { class: `chat-msg ${m.userId === myId ? 'mine' : ''}`, '--player-color': m.color || 'var(--text-muted)' },
+      el('div', { class: 'chat-meta' }, el('strong', {}, m.username), m.spectator ? ' · espectador' : '', ` · ${time}`),
+      el('div', { class: 'chat-text' }, m.text));
+  }) : [el('li', { class: 'chat-empty text-muted small' }, 'Nadie ha escrito todavía. ¡Saluda!')]));
+  if (atBottom || force) list.scrollTop = list.scrollHeight;
+}
+
+$('chat-toggle').addEventListener('click', () => setChatOpen(!chatOpen()));
+$('chat-form').addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  const input = $('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  act('chat', { text });
+  input.value = '';
+});
+try { if (localStorage.getItem('chat_open') === '1') setChatOpen(true); } catch { /* sin storage */ }
 
 // ── Sala de espera ───────────────────────────────────────────────────────────
 function renderWaitingRoom() {
   const mine = me();
-  if (mine && !selectedTheme) { selectedTheme = mine.themeId; selectedSkin = mine.skin.id; }
+  if (mine && !selectedTheme) {
+    selectedTheme = mine.themeId; selectedSkin = mine.skin.id;
+    selectedColor = mine.color; selectedDice = mine.dice ? mine.dice.id : config.defaultDice.id;
+  }
+  applySavedPrefs();
 
   $('theme-grid').replaceChildren(...config.themes.map(t => {
     const m = memberById(t.memberId);
     const color = WORLD_COLOR[t.memberId] || m.color;
     const free = t.skins.filter(isUnlocked).length;
+    const freeDice = t.dice.filter(d => isDiceUnlocked(d.id)).length;
+    const unlocking = progress && progress.prefs && progress.prefs.unlockTheme === t.id;
     return el('button', {
       type: 'button',
       class: 'theme-card',
@@ -1041,7 +1482,7 @@ function renderWaitingRoom() {
         render();
       }
     },
-      el('span', { class: 'theme-member' }, `${m.world} · ${m.name}`),
+      el('span', { class: 'theme-member' }, `${m.world} · ${m.name}`, unlocking ? ' · 🔓 liberando' : ''),
       el('strong', {}, t.name),
       el('span', { class: 'small text-muted' }, t.description),
       el('span', { class: 'theme-tokens' }, t.skins.map(s => {
@@ -1049,18 +1490,19 @@ function renderWaitingRoom() {
         if (!isUnlocked(s)) n.classList.add('locked');
         return n;
       })),
-      el('span', { class: 'small' }, `${free}/${t.skins.length} fichas desbloqueadas`)
+      el('span', { class: 'small' }, `${free}/${t.skins.length} fichas · ${freeDice}/${t.dice.length} dados`)
     );
   }));
 
   // Fichas de la temática elegida (las bloqueadas muestran su misión)
   const theme = config.themes.find(t => t.id === selectedTheme);
   $('skins-title').hidden = !theme;
-  $('skin-grid').replaceChildren(...(theme ? theme.skins.map(s => {
+  $('skin-grid').replaceChildren(...(theme ? theme.skins.map((s, i) => {
     const ok = isUnlocked(s);
+    const st = Collection.itemState(theme, theme.skins, i, progress);
     const color = WORLD_COLOR[theme.memberId];
-    const have = s.unlock && progress ? Math.min(Number(progress[s.unlock.stat] || 0), s.unlock.count) : 0;
-    const node = tokenOf(s, 'xl', ok ? color : '#4a4356');
+    const have = s.unlock ? Math.min(Collection.statOf(progress, theme.id, s.unlock.stat), s.unlock.count) : 0;
+    const node = tokenOf(s, 'xl', ok ? (selectedSkin === s.id && selectedColor ? selectedColor : color) : '#4a4356');
     if (!ok) node.classList.add('locked');
     return el('button', {
       type: 'button',
@@ -1071,14 +1513,57 @@ function renderWaitingRoom() {
     },
       node,
       el('span', { class: 'sname' }, s.name, ok ? '' : ' 🔒'),
-      el('span', { class: 'smission' }, s.starter ? 'Ficha inicial' : ok ? 'Desbloqueada' : `${s.unlock.text} (${have}/${s.unlock.count})`)
+      el('span', { class: 'smission' }, s.starter ? 'Ficha inicial'
+        : ok ? 'Desbloqueada'
+        : st === 'next' ? `${s.unlock.text} (${have}/${s.unlock.count})`
+        : `Libera antes "${theme.skins[i - 1].name}"`)
     );
   }) : []));
 
+  // Colores: no se pueden repetir dentro de la sala
+  const taken = new Map(state.players.filter(p => p.id !== myId).map(p => [p.color.toLowerCase(), p.username]));
+  if (mine && selectedColor && taken.has(selectedColor.toLowerCase())) selectedColor = mine.color;
+  const palette = config.playerColors || [];
+  const swatch = (c) => {
+    const owner = taken.get(c.toLowerCase());
+    return el('button', {
+      type: 'button', class: 'color-swatch', role: 'radio', '--sw': c,
+      'aria-checked': String((selectedColor || '').toLowerCase() === c.toLowerCase()),
+      disabled: !!owner,
+      title: owner ? `Lo usa ${owner}` : c,
+      onclick: () => { selectedColor = c; render(); }
+    });
+  };
+  const custom = el('label', { class: 'color-custom', title: 'Otro color' },
+    el('input', { type: 'color', value: selectedColor || '#d9b45a',
+      onchange: (ev) => { selectedColor = ev.target.value; render(); } }), 'Otro');
+  $('color-grid').replaceChildren(...palette.map(swatch), custom);
+
+  // Dados: el clásico y los de cada temática (cadena por grupo)
+  const diceGroups = [{ label: 'Clásico', list: [config.defaultDice], theme: null }]
+    .concat(config.themes.map(t => ({ label: t.name, list: t.dice, theme: t })));
+  $('dice-grid').replaceChildren(...diceGroups.map(g => el('div', { class: 'dice-group' },
+    el('div', { class: 'dice-group-title' }, g.label),
+    el('div', { class: 'dice-options' }, g.list.map((d, i) => {
+      const ok = isDiceUnlocked(d.id);
+      const st = g.theme ? Collection.itemState(g.theme, g.theme.dice, i, progress) : 'unlocked';
+      const have = d.unlock ? Math.min(Collection.statOf(progress, g.theme.id, d.unlock.stat), d.unlock.count) : 0;
+      const face = Collection.dieNode(d.style, 5, 'die-sm');
+      return el('button', {
+        type: 'button', class: `dice-option ${ok ? '' : 'locked'}`, disabled: !ok,
+        'aria-pressed': String(selectedDice === d.id),
+        title: ok ? d.name : (st === 'next' ? `${d.unlock.text} (${have}/${d.unlock.count})` : `Libera antes "${g.theme.dice[i - 1].name}"`),
+        onclick: () => { selectedDice = d.id; render(); }
+      }, face, el('span', { class: 'dice-name' }, d.name, ok ? '' : ' 🔒'),
+        !ok ? el('span', { class: 'smission' }, st === 'next' ? `${d.unlock.text} (${have}/${d.unlock.count})` : 'Bloqueado') : '');
+    }))
+  )));
+
   const join = $('join-btn');
-  const unchanged = mine && mine.themeId === selectedTheme && mine.skin.id === selectedSkin;
+  const unchanged = mine && mine.themeId === selectedTheme && mine.skin.id === selectedSkin &&
+    (mine.color || '').toLowerCase() === (selectedColor || '').toLowerCase() && (mine.dice ? mine.dice.id : '') === selectedDice;
   join.disabled = !selectedTheme || !selectedSkin || unchanged;
-  join.textContent = mine ? 'Cambiar temática / ficha' : 'Unirme a la partida';
+  join.textContent = mine ? 'Guardar cambios (temática / ficha / color / dado)' : 'Unirme a la partida';
   $('leave-btn').hidden = !mine;
   const start = $('start-btn');
   start.hidden = !(mine && state.hostId === myId);
@@ -1093,25 +1578,65 @@ function renderWaitingRoom() {
       const theme = config.themes.find(t => t.id === p.themeId);
       return el('li', {},
         tokenOf(p.skin, '', p.color),
+        p.dice ? Collection.dieNode(p.dice.style, 6, 'die-xs') : '',
         el('strong', {}, p.username), p.id === myId ? ' (tú)' : '',
-        el('span', { class: 'text-muted small' }, ` · ${p.skin.name} · ${theme ? theme.name : ''}`, p.id === state.hostId ? ' · anfitrión 👑' : '')
+        el('span', { class: 'text-muted small' }, ` · ${p.skin.name} · ${theme ? theme.name : ''}${p.dice ? ` · ${p.dice.name}` : ''}`, p.id === state.hostId ? ' · anfitrión 👑' : '')
       );
     })
     : [el('li', { class: 'text-muted' }, 'Nadie se ha unido todavía. ¡Sé el primero!')]));
+}
+
+// Preselección con lo guardado (auth-service o copia local): temática, ficha,
+// color y dado de la última vez. Solo si están desbloqueados.
+let prefsApplied = false;
+function applySavedPrefs() {
+  if (!config) return;
+  const p = { ...Collection.Prefs.get(), ...((progress && progress.prefs) || {}) };
+  if (!prefsApplied) {
+    const theme = config.themes.find(t => t.id === p.themeId);
+    if (!selectedTheme && theme) {
+      selectedTheme = theme.id;
+      const skin = theme.skins.find(s => s.id === p.skinId);
+      selectedSkin = skin && isUnlocked(skin) ? skin.id : (theme.skins.find(s => s.starter) || theme.skins[0]).id;
+    }
+    if (!selectedColor && p.color) selectedColor = p.color;
+    if (!selectedDice && p.diceId && isDiceUnlocked(p.diceId)) selectedDice = p.diceId;
+    prefsApplied = !!progress;   // se reintenta cuando llega el progreso del auth
+  }
+  if (!selectedDice || !isDiceUnlocked(selectedDice)) selectedDice = config.defaultDice.id;
+  if (selectedSkin && selectedTheme) {
+    const theme = config.themes.find(t => t.id === selectedTheme);
+    const skin = theme && theme.skins.find(s => s.id === selectedSkin);
+    if (skin && !isUnlocked(skin) && progress) selectedSkin = (theme.skins.find(s => s.starter) || theme.skins[0]).id;
+  }
+}
+
+function joinWithSelection() {
+  const data = { themeId: selectedTheme, skinId: selectedSkin, diceId: selectedDice || config.defaultDice.id };
+  if (selectedColor) data.color = selectedColor;
+  act('join', data);
+  // Se recuerda para la próxima partida (y tras cerrar sesión)
+  Collection.Prefs.save(originalToken, { themeId: data.themeId, skinId: data.skinId, diceId: data.diceId, ...(data.color ? { color: data.color } : {}) });
 }
 
 // ── Render principal ─────────────────────────────────────────────────────────
 function render() {
   if (!config || !state) return;
   const lobby = state.phase === 'lobby';
+  const wasHidden = $('game-area').hidden;
   $('waiting-room').hidden = !lobby;
   $('game-area').hidden = lobby;
+  document.body.classList.toggle('in-game', !lobby);
+  $('chat').hidden = false;
   renderPlayers();
+  renderChat();
   if (lobby) return renderWaitingRoom();
+  if (wasHidden) requestAnimationFrame(() => BoardView.fit());
   renderBoard();
   renderCenter();
   renderSpaceDetail();
   renderMyProps();
+  renderTableCards();
   renderTrade();
   renderLog();
   processEvents();
@@ -1119,8 +1644,8 @@ function render() {
   renderEndModal();
 }
 
-$('join-btn').addEventListener('click', () => act('join', { themeId: selectedTheme, skinId: selectedSkin }));
-$('leave-btn').addEventListener('click', () => { selectedTheme = null; selectedSkin = null; act('leave'); });
+$('join-btn').addEventListener('click', joinWithSelection);
+$('leave-btn').addEventListener('click', () => { selectedTheme = null; selectedSkin = null; prefsApplied = false; act('leave'); });
 $('start-btn').addEventListener('click', () => act('start'));
 
 // ── Conexión (Taller 6: GET /coordinator → WS; reconexión a otro coordinador) ─
@@ -1128,7 +1653,10 @@ $('me-name').textContent = currentUsername;
 $('room-name').textContent = ROOM_ID;
 
 async function loadProgress() {
-  try { progress = await Net.fetchProgress(originalToken); } catch { progress = null; }
+  try {
+    progress = await Net.fetchProgress(originalToken);
+    if (progress && progress.prefs) Collection.Prefs.merge(progress.prefs);
+  } catch { progress = null; }
   checkAchievements();
   render();
 }
@@ -1152,7 +1680,7 @@ function onMessage(msg) {
       // asiento se liberó: al reconectar volvemos a unirnos con la misma ficha.
       if (state.phase === 'lobby') {
         const mine = me();
-        if (mine) lastSeat = { themeId: mine.themeId, skinId: mine.skin.id };
+        if (mine) lastSeat = { themeId: mine.themeId, skinId: mine.skin.id, color: mine.color, diceId: mine.dice && mine.dice.id };
         else if (lastSeat && Date.now() < recoverUntil && rejoinTried !== state.version) {
           rejoinTried = state.version;
           act('join', lastSeat);
