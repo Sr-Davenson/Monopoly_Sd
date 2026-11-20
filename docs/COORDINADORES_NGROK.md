@@ -66,47 +66,69 @@ Antes, los coordinadores no se veían entre sí y aparecían uno a la vez. Habí
 
 ## 4. Paso a paso
 
-### 4.1 PC central: tres auth-services replicados + cliente web (Taller 7)
+### 4.0 Reparto recomendado: un rol por PC (Taller 7)
 
-Desde el Taller 7 el auth está **replicado**: tres procesos (`auth-a`, `auth-b`, `auth-c`), uno es líder y dos son réplicas. Cada auth necesita **un túnel** hacia su puerto HTTP; la mesh entre auths también puede ir por ese túnel en la ruta `/peer`, así no hace falta un segundo túnel por auth.
+| PC | Corre | Túneles de ngrok |
+| --- | --- | --- |
+| **PC de auths** | `auth-a`, `auth-b`, `auth-c` (puertos 4001–4003) | **3**, uno por auth. La mesh entre auths va por `localhost` (4101–4103): no necesita túneles |
+| **PC de coordinadores** | `coord-a`, `coord-b`, `coord-c` (puertos 5001–5003) | **3**, uno por coordinador |
+| **PC del cliente** | cliente web (puerto 3000) | 1 si otros juegan desde su navegador; 0 si solo se juega en este PC (`http://localhost:3000`) |
 
-1. Abran los túneles (archivo de configuración de §6 + `ngrok start --all`) y anoten las URLs:
+Cada PC usa **su propia cuenta de ngrok** con un solo agente y un archivo de configuración con sus túneles (§6). Los tres `.env` con `JWT_SECRET` deben tener **el mismo valor** (auth y coordinador).
 
-   ```
-   https://auth-a.ngrok-free.app  → localhost:4001
-   https://auth-b.ngrok-free.app  → localhost:4002
-   https://auth-c.ngrok-free.app  → localhost:4003
-   https://juego.ngrok-free.app   → localhost:3000
-   ```
+Por qué el auth necesita 3 túneles: el navegador del cliente y los coordinadores hablan con **cada** auth por separado (prueban la lista y siguen al líder). Si un auth no tiene URL pública, nadie de afuera lo alcanza y, cuando quede como líder, nadie podrá escribir.
 
-2. Arranquen cada auth con su URL pública y la **misma** lista `--cluster` (con `wss://…/peer`):
+### 4.1 PC de auths: tres auth-services replicados
 
-   ```bash
-   CLUSTER=auth-a=wss://auth-a.ngrok-free.app/peer,auth-b=wss://auth-b.ngrok-free.app/peer,auth-c=wss://auth-c.ngrok-free.app/peer
-   cd auth-service
-   node index.js --id auth-a --port 4001 --seed users.db --public-url https://auth-a.ngrok-free.app --peer-url wss://auth-a.ngrok-free.app/peer --cluster $CLUSTER
-   node index.js --id auth-b --port 4002 --seed users.db --public-url https://auth-b.ngrok-free.app --peer-url wss://auth-b.ngrok-free.app/peer --cluster $CLUSTER
-   node index.js --id auth-c --port 4003 --seed users.db --public-url https://auth-c.ngrok-free.app --peer-url wss://auth-c.ngrok-free.app/peer --cluster $CLUSTER
-   ```
+1. Túneles (`ngrok config edit`, luego `ngrok start --all`) y anotar las URLs:
 
-   `--public-url` es importante: es la `leaderUrl` que las réplicas entregan a clientes y coordinadores.
-
-3. En `client/.env` pongan la lista de auths y arranquen el cliente (`cd client && npm start`):
-
-   ```env
-   AUTH_URLS=https://auth-a.ngrok-free.app,https://auth-b.ngrok-free.app,https://auth-c.ngrok-free.app
+   ```yaml
+   tunnels:
+     auth-a: { proto: http, addr: 4001 }
+     auth-b: { proto: http, addr: 4002 }
+     auth-c: { proto: http, addr: 4003 }
    ```
 
-> En una sola máquina y sin ngrok basta con `npm run start:a`, `start:b` y `start:c` (ver el README).
+   ```
+   https://AAA.ngrok-free.app → 4001 · https://BBB.ngrok-free.app → 4002 · https://CCC.ngrok-free.app → 4003
+   ```
 
-### 4.2 Cada integrante: su coordinador
+2. Tres terminales. Los scripts ya traen el clúster por `localhost`; solo se agrega la URL pública de cada uno después de `--`:
+
+   ```powershell
+   cd auth-service; npm run start:a -- --public-url https://AAA.ngrok-free.app
+   cd auth-service; npm run start:b -- --public-url https://BBB.ngrok-free.app
+   cd auth-service; npm run start:c -- --public-url https://CCC.ngrok-free.app
+   ```
+
+   `--public-url` es la `leaderUrl` que las réplicas entregan a clientes y coordinadores: sin ella entregarían `localhost`.
+
+3. Cada auth abre su **panel** (`http://localhost:4001/`, `:4002/`, `:4003/`): rol, term, barra del último latido del líder, los tres auths con su estado, usuarios, log de replicación y eventos de elección.
+
+> **Auths en PCs distintos** (opcional): la mesh tiene que ir por los túneles. Cada uno arranca con `--peer-url wss://<su túnel>/peer` y todos con `--cluster auth-a=wss://AAA.ngrok-free.app/peer,auth-b=wss://BBB.ngrok-free.app/peer,auth-c=wss://CCC.ngrok-free.app/peer` (además de `--id`, `--port`, `--seed users.db` y `--public-url`).
+
+### 4.1b PC del cliente
+
+En `client/.env`:
+
+```env
+PORT=3000
+AUTH_URLS=https://AAA.ngrok-free.app,https://BBB.ngrok-free.app,https://CCC.ngrok-free.app
+GOOGLE_CLIENT_ID=<el mismo de siempre>
+```
+
+`cd client; npm start` y abrir `http://localhost:3000` (o la URL de su túnel, que debe estar autorizada en Google si se usa ese login).
+
+### 4.2 Coordinadores
 
 En `coordinator/.env` (o por línea de comandos con `--auth-urls`):
 
 ```env
-JWT_SECRET=<el mismo de todos>
-AUTH_URLS=https://auth-a.ngrok-free.app,https://auth-b.ngrok-free.app,https://auth-c.ngrok-free.app
+JWT_SECRET=<el mismo del auth>
+AUTH_URLS=https://AAA.ngrok-free.app,https://BBB.ngrok-free.app,https://CCC.ngrok-free.app
 ```
+
+Si los tres coordinadores corren en el **mismo PC**: abrir sus 3 túneles (5001, 5002, 5003) con el archivo de §6 y `ngrok start --all`, y luego `npm run start:a`, `start:b`, `start:c` en tres terminales (sin `--ngrok`: cada uno detecta el túnel de su puerto). Si cada integrante corre el suyo, usen las formas A, B o C de abajo.
 
 El coordinador prueba la lista en orden, manda los heartbeats **al líder** y, si el líder cambia, se reorienta solo (una réplica le responde `503 not_leader` con la `leaderUrl`).
 

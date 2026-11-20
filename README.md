@@ -71,6 +71,8 @@ auth-service/
   src/routes/auth.js           /register · /login · /auth/google
   src/routes/directory.js      /heartbeat · /leave · /coordinator (balanceo y rebalanceo) · /coordinators · /coordinator-peers
   src/routes/progress.js       /me/progress · /internal/match-result
+  src/panel.js · src/events.js API del panel del auth y eventos recientes
+  panel/index.html · panel.css · panel.js     Panel del auth (rol, term, elecciones, BD, log)
 
 coordinator/
   index.js                     Arranque
@@ -115,6 +117,7 @@ cd client       && npm install && cd ..
 cd auth-service && npm run start:a           # auth-a · http://localhost:4001 · mesh ws://localhost:4101
 cd auth-service && npm run start:b           # auth-b · http://localhost:4002 · mesh ws://localhost:4102
 cd auth-service && npm run start:c           # auth-c · http://localhost:4003 · mesh ws://localhost:4103
+#    Cada auth abre su panel (http://localhost:4001/ …) — con --no-panel no lo abre.
 #    A los ~7 s uno queda como leader:  curl http://localhost:4001/status
 #    (npm start sigue levantando un solo auth en :4000, como en talleres anteriores;
 #     en ese caso usen AUTH_URLS=http://localhost:4000 en cliente y coordinadores)
@@ -136,6 +139,7 @@ Cualquier otro coordinador: `node index.js --id coord-x --port 5004`. Con ngrok:
 | auth | `--id`, `--port`, `--peer-port`, `--public-url`, `--peer-url` | `auth-<port>`, `4000`, `port+100`, `http://localhost:<port>`, `ws://localhost:<peer-port>` | Identidad del nodo. `--public-url` es la `leaderUrl` que se entrega a los demás |
 | auth | `--cluster` / `AUTH_CLUSTER` | (vacío = nodo único) | `auth-a=ws://…:4101,auth-b=ws://…:4102,auth-c=ws://…:4103`. La **misma** lista en los tres |
 | auth | `--db`, `--seed` | `data/<id>.db`, — | BD local del nodo · BD heredada para sembrar un nodo nuevo (los scripts usan `users.db`) |
+| auth | `--no-panel` / `OPEN_PANEL=0` | | No abrir el panel del auth en el navegador al arrancar |
 | auth | `LEADER_HEARTBEAT_MS`, `ELECTION_TIMEOUT_MS`, `ELECTION_JITTER_MS` | `2000`, `6000`, `1500` | Latido del líder · sin latido este tiempo → elección · azar para evitar empates |
 | auth | `WRITE_ACK_TIMEOUT_MS`, `LAG_TOLERANCE` | `3000`, `10` | Espera de ACK de la mayoría (opción B) · atraso máximo para leer en una réplica |
 | auth | `HEARTBEAT_TTL_MS` | `3000` | Sin heartbeat durante este tiempo → coordinador muerto |
@@ -297,7 +301,8 @@ La moneda son los **Doblones (Đ)**. Las fichas son dibujos SVG propios (`client
 
 El tutorial completo está en **[`docs/COORDINADORES_NGROK.md`](docs/COORDINADORES_NGROK.md)**. En resumen:
 
-- PC central: un túnel por **auth** (4001, 4002, 4003) y uno para el **cliente** (3000). Cada auth arranca con `--public-url https://<su túnel>` y la mesh entre auths va por `wss://<su túnel>/peer` (un solo túnel por auth). En `client/.env`: `AUTH_URLS=https://<auth-a>,https://<auth-b>,https://<auth-c>`. Comandos completos en el [tutorial §4.1](docs/COORDINADORES_NGROK.md#41-pc-central-tres-auth-services-replicados--cliente-web-taller-7).
+- Reparto recomendado: un PC para los **3 auths** (3 túneles), uno para los **3 coordinadores** (3 túneles) y uno para el **cliente**. Ver el [tutorial §4.0](docs/COORDINADORES_NGROK.md#40-reparto-recomendado-un-rol-por-pc-taller-7).
+- PC de auths: `npm run start:a -- --public-url https://<túnel-a>` (igual con `b` y `c`). La mesh entre auths va por `localhost`. En `client/.env`: `AUTH_URLS=https://<túnel-a>,https://<túnel-b>,https://<túnel-c>`.
 - Cada integrante: `node index.js --id coord-<nombre> --port 5001 --auth-urls https://<auth-a>,https://<auth-b>,https://<auth-c> --ngrok`. **Un solo túnel por coordinador**, porque la mesh va por `/peer` en el mismo puerto.
 - Si ngrok ya está abierto, el coordinador detecta el túnel de su puerto y anuncia `wss://…` sin configurar nada.
 
@@ -320,6 +325,15 @@ Antes de empezar: levantar `start:a`, `start:b`, `start:c` del auth, tres coordi
 # Ayuda: estado de los tres auths en una línea
 for p in 4001 4002 4003; do curl -s localhost:$p/status; echo; done
 ```
+
+Lo más visual es el **panel de cada auth** (`http://localhost:4001/`, `:4002/`, `:4003/` en el PC de los auths). Muestra:
+- el rol y el term;
+- una barra con el tiempo desde el último latido del líder (se pone roja antes de declararlo muerto);
+- tarjetas de los tres auths: ★ líder, réplica o caído;
+- los usuarios y el log de replicación de la BD local;
+- los eventos de elección y votos.
+
+Conviene tener abierto el panel de una réplica mientras se mata al líder.
 
 1. **Tres auths (3 min).** `GET /status` de cada uno: uno dice `"role":"leader"`, los otros dos `"replica"`, y los tres muestran el mismo `users` y `lastAppliedSeq`. `GET /peers` muestra el rol de cada nodo.
 2. **Registrar alice (3 min).** Desde la página de login (o `curl -X POST localhost:4002/register -H "Content-Type: application/json" -d '{"username":"alice","password":"1234"}'`). Si le pegan a una réplica, responde `503 {"error":"not_leader","leaderUrl":…}` y el cliente repite contra el líder solo. Luego los tres `/status` muestran `users: N+1`. La consola del líder imprime `Escritura #… confirmada por auth-x → se responde al cliente`.
