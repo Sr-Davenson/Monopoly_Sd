@@ -6,13 +6,14 @@
   <title>Cuatro Mundos — Tablero</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700&family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@500;700;900&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700&family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@500;700;900&family=Special+Elite&display=swap" />
   <link rel="stylesheet" href="css/styles.css" />
   <link rel="stylesheet" href="css/game.css" />
   <script src="js/config.js"></script>
   <script src="js/lib/auth.js"></script>
   <script src="js/lib/dom.js"></script>
   <script src="js/lib/tokens.js"></script>
+  <script src="js/lib/collection.js"></script>
   <script src="js/lib/net.js"></script>
   <script src="js/lib/sounds.js"></script>
 </head>
@@ -34,14 +35,26 @@
   </header>
   <div id="lost-banner" class="lost-banner" role="status" hidden></div>
 
-  <!-- ── Sala de espera: temática y ficha (solo antes de iniciar) ──────────── -->
+  <!-- ── Sala de espera: temática, ficha, color y dado (solo antes de iniciar) ── -->
   <section id="waiting-room" class="waiting-room" hidden>
     <div class="card">
       <h2><span id="waiting-title">Sala de espera</span><span class="badge" id="waiting-count">0/6</span></h2>
-      <p class="text-muted small">1) Escoge la temática con la que juegas. 2) Escoge tu ficha: la inicial siempre está disponible y las demás se desbloquean con misiones. Puedes cambiarlas hasta que empiece la partida.</p>
+      <p class="text-muted small">1) Escoge la temática. 2) Escoge tu ficha, tu color y tu dado: lo inicial siempre está disponible y lo demás se libera con misiones (en el lobby eliges qué grupo estás liberando). Tu elección se guarda para la próxima vez.</p>
       <div id="theme-grid" class="theme-grid"></div>
       <h3 class="mt skins-title" id="skins-title" hidden>Tu ficha</h3>
       <div id="skin-grid" class="skin-grid"></div>
+
+      <div class="pick-row">
+        <div class="pick-block">
+          <h3 class="skins-title">Tu color</h3>
+          <div id="color-grid" class="color-grid" role="radiogroup" aria-label="Color de tu ficha"></div>
+        </div>
+        <div class="pick-block pick-dice">
+          <h3 class="skins-title">Tu dado</h3>
+          <div id="dice-grid" class="dice-grid"></div>
+        </div>
+      </div>
+
       <div class="waiting-actions">
         <button id="join-btn" class="btn" disabled>Unirme</button>
         <button id="leave-btn" class="btn btn-ghost" hidden>Salir de la sala</button>
@@ -54,31 +67,61 @@
 
   <!-- ── Partida ────────────────────────────────────────────────────────────── -->
   <main id="game-area" class="game-area" hidden>
-    <div class="board-wrap">
-      <div id="board" class="board">
-        <div class="board-center">
-          <div class="center-logo">
-            <span class="center-kicker" id="center-room">Sala</span>
-            <div class="center-title">Cuatro Mundos</div>
-            <div class="tagline center-tagline">
-              <span class="t-galaxy">Galaxias</span><span class="sep">·</span><span class="t-fantasy">Hechizos</span><span class="sep">·</span><span class="t-viking">Runas</span><span class="sep">·</span><span class="t-letters">Letras</span>
+    <section class="table-zone">
+      <!-- Tablero expansivo: rueda = zoom, arrastrar = mover -->
+      <div id="board-viewport" class="board-viewport" aria-label="Tablero: usa la rueda del mouse para acercar o alejar y arrastra para moverte">
+        <div id="board-stage" class="board-stage">
+          <div id="board" class="board">
+            <div class="board-center">
+              <div class="center-logo">
+                <span class="center-kicker" id="center-room">Sala</span>
+                <div class="center-title">Cuatro Mundos</div>
+                <div class="tagline center-tagline">
+                  <span class="t-galaxy">Galaxias</span><span class="sep">·</span><span class="t-fantasy">Hechizos</span><span class="sep">·</span><span class="t-viking">Runas</span><span class="sep">·</span><span class="t-letters">Letras</span>
+                </div>
+              </div>
+              <div id="turn-info" class="turn-info"></div>
+              <div id="turn-timer" class="turn-timer" hidden>
+                <div class="turn-timer-bar"><span id="turn-timer-fill"></span></div>
+                <span id="turn-timer-text" class="turn-timer-text">1:30</span>
+              </div>
+              <div id="charge-now" class="charge-now" hidden></div>
+              <div class="dice-row" id="dice-row"></div>
+              <div id="actions" class="actions"></div>
+              <div id="pot" class="pot"></div>
+              <div id="last-card" class="last-card" hidden></div>
             </div>
           </div>
-          <div id="turn-info" class="turn-info"></div>
-          <div id="turn-timer" class="turn-timer" hidden>
-            <div class="turn-timer-bar"><span id="turn-timer-fill"></span></div>
-            <span id="turn-timer-text" class="turn-timer-text">1:30</span>
-          </div>
-          <div class="dice-row">
-            <div id="die-1" class="die">–</div>
-            <div id="die-2" class="die">–</div>
-          </div>
-          <div id="actions" class="actions"></div>
-          <div id="pot" class="pot"></div>
-          <div id="last-card" class="last-card" hidden></div>
         </div>
+
+        <!-- Arriba a la izquierda: intercambio siempre a mano -->
+        <div class="board-hud hud-left">
+          <button id="trade-btn" class="btn trade-fab" type="button">⇄ Intercambiar</button>
+          <div id="trade-hint" class="trade-hint"></div>
+        </div>
+
+        <!-- Arriba a la derecha: zoom -->
+        <div class="board-hud hud-right" role="group" aria-label="Zoom del tablero">
+          <button id="zoom-in" class="zoom-btn" type="button" title="Acercar (rueda del mouse)">＋</button>
+          <button id="zoom-out" class="zoom-btn" type="button" title="Alejar (rueda del mouse)">－</button>
+          <button id="zoom-fit" class="zoom-btn" type="button" title="Ver el tablero completo (doble clic)">⤢</button>
+          <span id="zoom-level" class="zoom-level">100%</span>
+        </div>
+
+        <!-- Avisos grandes: renta, compras, tarjetas... -->
+        <div id="event-feed" class="event-feed" aria-live="polite"></div>
       </div>
-    </div>
+
+      <!-- La mesa: títulos de propiedad de cada jugador -->
+      <section class="table-cards-wrap" aria-label="Propiedades de cada jugador sobre la mesa">
+        <header class="table-cards-head">
+          <h3>Sobre la mesa</h3>
+          <span class="small text-muted">Títulos de propiedad de cada jugador · la renta que se cobra ahora va resaltada</span>
+          <button id="table-toggle" class="btn btn-small btn-ghost" type="button" aria-expanded="true">Ocultar</button>
+        </header>
+        <div id="table-cards" class="table-cards"></div>
+      </section>
+    </section>
 
     <aside class="side-panel">
       <div class="panel">
@@ -88,7 +131,7 @@
 
       <div class="panel">
         <h3>Casilla seleccionada</h3>
-        <div id="space-detail" class="space-detail text-muted small">Haz clic en una casilla del tablero.</div>
+        <div id="space-detail" class="space-detail text-muted small">Haz clic en una casilla del tablero o en un título de la mesa.</div>
       </div>
 
       <div class="panel">
@@ -97,16 +140,25 @@
       </div>
 
       <div class="panel">
-        <h3>Intercambios</h3>
-        <div id="trade-summary" class="trade-summary small"></div>
-      </div>
-
-      <div class="panel">
         <h3>Registro</h3>
         <ol id="log" class="log"></ol>
       </div>
     </aside>
   </main>
+
+  <!-- Chat de la partida -->
+  <section id="chat" class="chat-dock" data-open="false" aria-label="Chat de la partida" hidden>
+    <button id="chat-toggle" class="chat-toggle" type="button" aria-expanded="false">
+      <span>💬 Chat</span><span id="chat-unread" class="chat-unread" hidden>0</span>
+    </button>
+    <div class="chat-body">
+      <ol id="chat-list" class="chat-list" aria-live="polite"></ol>
+      <form id="chat-form" class="chat-form" autocomplete="off">
+        <input id="chat-input" type="text" maxlength="240" placeholder="Escribe un mensaje…" aria-label="Mensaje" />
+        <button class="btn btn-small" type="submit">Enviar</button>
+      </form>
+    </div>
+  </section>
 
   <!-- Ventana flotante de intercambios (se puede arrastrar desde la barra) -->
   <section id="trade-window" class="float-win" role="dialog" aria-labelledby="trade-win-title" hidden>

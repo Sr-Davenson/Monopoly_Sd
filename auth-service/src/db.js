@@ -44,6 +44,22 @@ db.exec(`
     buildings_built    INTEGER NOT NULL DEFAULT 0
   );
 
+  -- Contadores de misiones por ámbito: 'all' (global) o el id de una temática
+  -- (el "grupo en liberación" del jugador cuando terminó la partida)
+  CREATE TABLE IF NOT EXISTS user_counters (
+    user_id  INTEGER NOT NULL,
+    scope    TEXT    NOT NULL,
+    stat     TEXT    NOT NULL,
+    value    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, scope, stat)
+  );
+
+  -- Preferencias del jugador (ficha, color, dado, grupo en liberación) en JSON
+  CREATE TABLE IF NOT EXISTS user_prefs (
+    user_id  INTEGER PRIMARY KEY,
+    data     TEXT NOT NULL
+  );
+
   -- Evita contar dos veces la misma partida si se reporta más de una vez
   CREATE TABLE IF NOT EXISTS matches (
     match_id     TEXT PRIMARY KEY,
@@ -95,6 +111,14 @@ const stmts = {
     VALUES (@userId, @games_played, @games_won, @properties_bought, @buildings_built)
   `),
 
+  getCounters: db.prepare('SELECT scope, stat, value FROM user_counters WHERE user_id = ?'),
+  addCounter: db.prepare(`
+    INSERT INTO user_counters (user_id, scope, stat, value) VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, scope, stat) DO UPDATE SET value = value + excluded.value
+  `),
+  getPrefs:  db.prepare('SELECT data FROM user_prefs WHERE user_id = ?'),
+  setPrefs:  db.prepare('INSERT OR REPLACE INTO user_prefs (user_id, data) VALUES (?, ?)'),
+
   lastEntry:  db.prepare('SELECT seq, term FROM replication_log ORDER BY seq DESC LIMIT 1'),
   termAt:     db.prepare('SELECT term FROM replication_log WHERE seq = ?'),
   entriesFrom: db.prepare('SELECT seq, term, op, data FROM replication_log WHERE seq > ? ORDER BY seq'),
@@ -123,9 +147,32 @@ const OPS = {
     const inserted = stmts.insertMatch.run(d.matchId, d.roomId || '', d.reportedBy || '', d.finished_at);
     if (inserted.changes === 0) return;   // ya estaba
     for (const p of d.players || []) {
-      if (!stmts.findById.get(Number(p.userId))) continue;
-      stmts.addStats.run({ userId: Number(p.userId), won: p.won ? 1 : 0, bought: p.bought, built: p.built });
+      const userId = Number(p.userId);
+      if (!stmts.findById.get(userId)) continue;
+      stmts.addStats.run({ userId, won: p.won ? 1 : 0, bought: p.bought, built: p.built });
+
+      // Contadores de misiones. Las entradas antiguas del log (sin `s`) no los
+      // tocan: así un nodo que reaplica el log queda igual que uno que no.
+      if (!p.s) continue;
+      const s = { ...p.s, gamesPlayed: 1, gamesWon: p.won ? 1 : 0 };
+      // Grupo en liberación: el elegido en el lobby o, si nunca eligió, la
+      // temática con la que jugó (y queda guardada como su grupo). Todo sale
+      // de la BD replicada y de `d`, así que es determinista en cada nodo.
+      const prefs = readPrefs(userId);
+      let scope = prefs.unlockTheme || (p.themeId ? String(p.themeId) : null);
+      if (scope && !prefs.unlockTheme) stmts.setPrefs.run(userId, JSON.stringify({ ...prefs, unlockTheme: scope }));
+      for (const [stat, value] of Object.entries(s)) {
+        const n = Math.max(0, Math.floor(Number(value) || 0));
+        if (!n || !/^[a-zA-Z]{1,32}$/.test(stat)) continue;
+        stmts.addCounter.run(userId, 'all', stat, n);
+        if (scope) stmts.addCounter.run(userId, scope, stat, n);
+      }
     }
+  },
+  // Preferencias del jugador (se guardan completas: ya vienen fusionadas)
+  set_prefs(d) {
+    if (!stmts.findById.get(Number(d.userId))) return;
+    stmts.setPrefs.run(Number(d.userId), JSON.stringify(d.prefs || {}));
   },
   // Solo para importar una BD de talleres anteriores (ver importLegacy)
   import_stats(d) { stmts.setStats.run(d); },
@@ -144,9 +191,24 @@ const applyMany = db.transaction((entries) => { for (const e of entries) applyEn
 
 // Borra todo y vuelve a aplicar el log del líder (cuando hay divergencia)
 const resetAndApply = db.transaction((entries) => {
-  db.exec('DELETE FROM user_stats; DELETE FROM matches; DELETE FROM users; DELETE FROM replication_log;');
+  db.exec('DELETE FROM user_stats; DELETE FROM user_counters; DELETE FROM user_prefs; DELETE FROM matches; DELETE FROM users; DELETE FROM replication_log;');
   for (const e of entries) applyEntry(e);
 });
+
+function readPrefs(userId) {
+  const r = stmts.getPrefs.get(Number(userId));
+  if (!r) return {};
+  try { const v = JSON.parse(r.data); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
+}
+
+// { all: {stat: n}, tema_x: {stat: n}, ... }
+function readCounters(userId) {
+  const out = {};
+  for (const r of stmts.getCounters.all(Number(userId))) {
+    (out[r.scope] = out[r.scope] || {})[r.stat] = r.value;
+  }
+  return out;
+}
 
 function lastSeq()  { const r = stmts.lastEntry.get(); return r ? r.seq : 0; }
 function lastTerm() { const r = stmts.lastEntry.get(); return r ? r.term : 0; }
@@ -206,5 +268,6 @@ function setMeta(key, value) { stmts.setMeta.run(key, value == null ? null : Str
 
 module.exports = {
   db, stmts, applyEntry, applyMany, resetAndApply,
-  lastSeq, lastTerm, termAt, entriesFrom, userCount, getMeta, setMeta, recentUsers, logTail
+  lastSeq, lastTerm, termAt, entriesFrom, userCount, getMeta, setMeta, recentUsers, logTail,
+  readPrefs, readCounters
 };

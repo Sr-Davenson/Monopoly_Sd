@@ -390,7 +390,8 @@ async function fetchProgress(token) {
   try {
     const res = await authFetch('/me/progress', { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) return null;
-    return res.data.stats || null;
+    // { stats (globales), themes: { tema_x: {...} }, prefs }
+    return res.data || null;
   } catch {
     return null;
   }

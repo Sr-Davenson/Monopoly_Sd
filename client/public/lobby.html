@@ -13,6 +13,7 @@
   <script src="js/lib/auth.js"></script>
   <script src="js/lib/dom.js"></script>
   <script src="js/lib/tokens.js"></script>
+  <script src="js/lib/collection.js"></script>
   <script src="js/lib/net.js"></script>
 </head>
 <body>
@@ -114,9 +115,10 @@
     </div>
 
     <!-- ── Colección y misiones ─────────────────────────────────────────────── -->
-    <h2 class="section-title">Colección de fichas <small>Cada temática trae una ficha inicial; las demás se desbloquean con misiones</small></h2>
+    <h2 class="section-title">Colección de fichas y dados <small>Libera un grupo a la vez: las misiones de cada partida cuentan para el grupo que elijas, y dentro del grupo las fichas y dados se liberan en orden</small></h2>
     <section class="card">
       <div id="stats" class="stats-row"></div>
+      <div id="unlock-banner" class="unlock-banner"></div>
       <div id="collection" class="collection"><p class="text-muted">Cargando temáticas...</p></div>
     </section>
   </div>

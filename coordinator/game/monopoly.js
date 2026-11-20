@@ -13,12 +13,22 @@ const crypto = require('node:crypto');
 const eco = require('./economy');
 const { SPACE, SPACES, GROUPS, BOARD_SIZE, JAIL_POSITION, isOwnable } = require('./board');
 const { DECKS } = require('./cards');
-const { findTheme, findSkin, starterSkin } = require('./themes');
+const { findTheme, findSkin, starterSkin, findDice, DEFAULT_DICE } = require('./themes');
 
 class GameError extends Error {}
 
-const PLAYER_COLORS = ['#f43f5e', '#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#06b6d4'];
+// Los 6 primeros se asignan por defecto; el resto se puede elegir en la sala.
+const PLAYER_COLORS = ['#f43f5e', '#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#06b6d4',
+                       '#ec4899', '#84cc16', '#f97316', '#e2e8f0', '#d9b45a', '#14b8a6'];
+const COLOR_RE = /^#[0-9a-f]{6}$/i;
 const LOG_LIMIT = 40;
+const CHAT_LIMIT = 80;          // mensajes de chat que se conservan por sala
+const CHAT_MAX_LEN = 240;
+const MAX_COUNTER_ROUNDS = 6;   // contraofertas encadenadas sobre un mismo intercambio
+
+// Estadísticas por partida que se reportan para las misiones
+const MATCH_STATS = ['propertiesBought', 'buildingsBuilt', 'hotelsBuilt', 'rentCollected', 'tradesDone',
+                     'cardsDrawn', 'jailVisits', 'lapsCompleted', 'potWins', 'doublesRolled', 'groupsCompleted'];
 // Tiempo máximo por turno: al vencer, el turno pasa al siguiente jugador.
 const TURN_TIMEOUT_MS    = Number(process.env.TURN_TIMEOUT_MS || 90 * 1000);
 // Un jugador desconectado tiene este tiempo para volver antes de quedar fuera.
@@ -80,12 +90,27 @@ class MonopolyGame {
     this.log        = [];
     this.version    = 0;
     this.matchId    = null;            // id único de cada partida (para las misiones)
+    this.chat       = [];              // chat de la sala
+    this.nextChat   = 1;
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   addLog(text) {
     this.log.push({ t: Date.now(), text });
     if (this.log.length > LOG_LIMIT) this.log.shift();
+  }
+
+  // Suma a una estadística de la partida (para las misiones)
+  bump(p, stat, n = 1) {
+    if (!p) return;
+    if (!p.stats) p.stats = {};
+    p.stats[stat] = (Number(p.stats[stat]) || 0) + n;
+  }
+
+  // Tras recibir propiedades: cuenta los grupos de color que quedaron completos
+  countNewGroups(p, spaceIds) {
+    const groups = new Set(spaceIds.map(id => SPACES[id]).filter(s => s.type === SPACE.PROPERTY).map(s => s.group));
+    for (const g of groups) if (this.ownsGroup(p.id, g)) this.bump(p, 'groupsCompleted');
   }
 
   getPlayer(id) {
@@ -149,12 +174,18 @@ class MonopolyGame {
   // skinId es opcional: si no se envía se usa la ficha inicial de la temática.
   // Que la ficha esté DESBLOQUEADA lo valida el coordinador (necesita el
   // progreso del usuario, que vive en el auth-service).
-  join(id, username, themeId, skinId) {
+  // opts = { color: '#rrggbb', diceId } (opcionales). Si el color ya lo usa
+  // otro jugador se asigna uno libre. Que el dado esté desbloqueado lo valida
+  // el coordinador.
+  join(id, username, themeId, skinId, opts = {}) {
     id = String(id);
     const theme = findTheme(themeId);
     if (!theme) throw new GameError('Temática inválida');
     const skin = skinId ? findSkin(theme, skinId) : starterSkin(theme);
     if (!skin) throw new GameError('Esa ficha no pertenece a la temática elegida');
+    const foundDice = findDice(opts.diceId);
+    if (!foundDice) throw new GameError('Dado inválido');
+    const dice = { id: foundDice.dice.id, name: foundDice.dice.name, style: foundDice.dice.style };
     const existing = this.getPlayer(id);
 
     if (this.phase !== 'lobby') {
@@ -162,22 +193,30 @@ class MonopolyGame {
       throw new GameError('La partida ya comenzó');
     }
 
-    // En la sala se puede cambiar de temática o ficha; al iniciar queda fija.
+    const used = new Set(this.players.filter(p => p.id !== id).map(p => p.color.toLowerCase()));
+    const wanted = typeof opts.color === 'string' && COLOR_RE.test(opts.color) ? opts.color.toLowerCase() : null;
+    const pickColor = (current) => (wanted && !used.has(wanted)) ? wanted
+      : (current && !used.has(current.toLowerCase())) ? current
+      : PLAYER_COLORS.find(c => !used.has(c));
+
+    // En la sala se puede cambiar de temática, ficha, color o dado; al iniciar queda fijo.
     if (existing) {
       existing.themeId = theme.id;
       existing.skin = { ...skin };
+      existing.dice = dice;
+      existing.color = pickColor(existing.color);
       return;
     }
 
     if (this.players.length >= eco.MAX_PLAYERS) throw new GameError('La partida está llena');
 
-    const used = new Set(this.players.map(p => p.color));
     this.players.push({
       id,
       username,
       themeId: theme.id,
       skin: { ...skin },
-      color: PLAYER_COLORS.find(c => !used.has(c)),
+      dice,
+      color: pickColor(null),
       money: eco.STARTING_MONEY,
       position: 0,
       inJail: false,
@@ -186,7 +225,7 @@ class MonopolyGame {
       bankrupt: false,
       connected: true,
       disconnectedAt: null,
-      stats: { bought: 0, built: 0 }   // para las misiones de desbloqueo
+      stats: {}                        // para las misiones de desbloqueo (ver MATCH_STATS)
     });
     if (!this.hostId) this.hostId = id;
     this.addLog(`${username} se unió con la temática ${theme.name}`);
@@ -217,13 +256,19 @@ class MonopolyGame {
   restart(id) {
     if (this.phase !== 'finished') throw new GameError('La partida no ha terminado');
     if (String(id) !== this.hostId) throw new GameError('Solo el anfitrión puede reiniciar');
-    const keep = this.players.map(p => ({ id: p.id, username: p.username, themeId: p.themeId, skinId: p.skin.id, connected: p.connected }));
+    const keep = this.players.map(p => ({
+      id: p.id, username: p.username, themeId: p.themeId, skinId: p.skin.id,
+      color: p.color, diceId: p.dice && p.dice.id, connected: p.connected
+    }));
     const host = this.hostId;
     const version = this.version;
+    const chat = this.chat, nextChat = this.nextChat;
     this.reset();
     this.version = version;            // la versión nunca retrocede (replicación)
+    this.chat = chat;                  // el chat de la sala se conserva
+    this.nextChat = nextChat;
     for (const k of keep) {
-      this.join(k.id, k.username, k.themeId, k.skinId);
+      this.join(k.id, k.username, k.themeId, k.skinId, { color: k.color, diceId: k.diceId });
       this.setConnected(k.id, k.connected);
     }
     this.hostId = host;
@@ -276,6 +321,7 @@ class MonopolyGame {
     this.turn.dice = dice;
     this.turn.rollAgain = false;
     this.addLog(`${p.username} sacó ${d1} + ${d2}${isDouble ? ' (dobles)' : ''}`);
+    if (isDouble) this.bump(p, 'doublesRolled');
 
     if (p.inJail) {
       if (isDouble) {
@@ -327,6 +373,7 @@ class MonopolyGame {
     const target = p.position + steps;
     if (target >= BOARD_SIZE) {
       p.money += eco.SALARY;
+      this.bump(p, 'lapsCompleted');
       this.addLog(`${p.username} pasa por Salida y cobra ${eco.SALARY}`);
     }
     p.position = target % BOARD_SIZE;
@@ -342,6 +389,7 @@ class MonopolyGame {
     p.inJail = true;
     p.jailTurns = 0;
     this.turn.rollAgain = false;
+    this.bump(p, 'jailVisits');
     this.addLog(`${p.username} va al calabozo`);
   }
 
@@ -358,6 +406,7 @@ class MonopolyGame {
       case SPACE.REST:
         if (this.pot > 0) {
           p.money += this.pot;
+          this.bump(p, 'potWins');
           this.addLog(`${p.username} se lleva el Fondo de Donaciones: ${this.pot}`);
           this.pot = 0;
         }
@@ -388,6 +437,7 @@ class MonopolyGame {
         }
         const rent = this.computeRent(space, prop) * rentMultiplier;
         const owner = this.getPlayer(prop.ownerId);
+        this.bump(owner, 'rentCollected', rent);
         this.addLog(`${p.username} debe pagar ${rent} de renta a ${owner.username}`);
         this.charge(p, rent, [{ id: owner.id, amount: rent }]);
       }
@@ -462,6 +512,7 @@ class MonopolyGame {
     else deck.push(index);
 
     this.lastCard = { deck: deckName, title: card.title, text: card.text, playerId: p.id, seq: this.version + 1 };
+    this.bump(p, 'cardsDrawn');
     this.addLog(`${p.username} toma Tarjeta ${deckName === 'general' ? 'General' : 'Especial'}: ${card.text}`);
 
     switch (e.kind) {
@@ -532,7 +583,8 @@ class MonopolyGame {
     }
     p.money -= space.price;
     this.properties[space.id].ownerId = p.id;
-    p.stats.bought++;
+    this.bump(p, 'propertiesBought');
+    this.countNewGroups(p, [space.id]);
     this.turn.pendingBuy = null;
     this.addLog(`${p.username} compró ${space.name} por ${space.price}`);
     this.updateStage();
@@ -587,7 +639,8 @@ class MonopolyGame {
     if (p.money < space.houseCost) throw new GameError(`No te alcanza (${space.houseCost})`);
     p.money -= space.houseCost;
     prop.level++;
-    p.stats.built++;
+    this.bump(p, 'buildingsBuilt');
+    if (prop.level === eco.MAX_BUILDING_LEVEL) this.bump(p, 'hotelsBuilt');
     this.addLog(`${p.username} construyó en ${space.name} (${prop.level === 5 ? 'hotel' : prop.level + ' casa(s)'})`);
   }
 
@@ -706,9 +759,57 @@ class MonopolyGame {
     };
     move(from, to, t.offer);
     move(to, from, t.request);
+    this.bump(from, 'tradesDone');
+    this.bump(to, 'tradesDone');
+    this.countNewGroups(to, t.offer.properties);
+    this.countNewGroups(from, t.request.properties);
     this.trade = null;
     this.addLog(`${to.username} aceptó el intercambio con ${from.username}`);
     this.tryResolveDebt();
+  }
+
+  // Contraoferta: quien recibe la oferta la reemplaza por una suya (puede
+  // cambiar dinero, propiedades y cartas de ambos lados). La recibe ahora
+  // quien hizo la oferta original, que puede aceptar, rechazar o contraofertar.
+  counterTrade(id, { tradeId, offer, request } = {}) {
+    this.requirePlaying();
+    const t = this.trade;
+    if (!t || t.id !== Number(tradeId)) throw new GameError('Intercambio no encontrado');
+    if (t.toId !== String(id)) throw new GameError('Solo quien recibe la oferta puede contraofertar');
+    const round = (t.round || 0) + 1;
+    if (round > MAX_COUNTER_ROUNDS) throw new GameError(`Máximo ${MAX_COUNTER_ROUNDS} contraofertas: acepta o rechaza`);
+    const me = this.requirePlayer(id);
+    const other = this.getPlayer(t.fromId);
+    if (!other || other.bankrupt) throw new GameError('Jugador destino inválido');
+
+    offer = this.normalizeSide(offer);
+    request = this.normalizeSide(request);
+    const empty = s => s.money === 0 && s.properties.length === 0 && s.jailCards === 0;
+    if (empty(offer) && empty(request)) throw new GameError('La contraoferta está vacía');
+    this.validateSide(me, offer);
+    this.validateSide(other, request);
+
+    this.trade = { id: this.nextTrade++, fromId: me.id, toId: other.id, offer, request, round, counterOf: t.id };
+    this.addLog(`${me.username} hace una contraoferta a ${other.username}`);
+  }
+
+  // ── Chat de la sala (jugadores y espectadores) ─────────────────────────────
+  postChat(id, username, text) {
+    const clean = typeof text === 'string'
+      ? text.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX_LEN)
+      : '';
+    if (!clean) throw new GameError('Mensaje vacío');
+    const p = this.getPlayer(id);
+    this.chat.push({
+      id: this.nextChat++,
+      t: Date.now(),
+      userId: String(id),
+      username: String(username || (p && p.username) || 'Jugador').slice(0, 40),
+      color: p ? p.color : null,
+      spectator: !p,
+      text: clean
+    });
+    if (this.chat.length > CHAT_LIMIT) this.chat.splice(0, this.chat.length - CHAT_LIMIT);
   }
 
   cancelTrade(id, { tradeId } = {}) {
@@ -842,7 +943,7 @@ class MonopolyGame {
   // ── Despacho de acciones ───────────────────────────────────────────────────
   handle(userId, username, action, data = {}) {
     const actions = {
-      join:            () => this.join(userId, username, data.themeId, data.skinId),
+      join:            () => this.join(userId, username, data.themeId, data.skinId, { color: data.color, diceId: data.diceId }),
       leave:           () => this.leave(userId),
       start:           () => this.start(userId),
       restart:         () => this.restart(userId),
@@ -859,6 +960,8 @@ class MonopolyGame {
       trade_propose:   () => this.proposeTrade(userId, data),
       trade_respond:   () => this.respondTrade(userId, data),
       trade_cancel:    () => this.cancelTrade(userId, data),
+      trade_counter:   () => this.counterTrade(userId, data),
+      chat:            () => this.postChat(userId, username, data.text),
       bankrupt:        () => this.declareBankruptcy(userId),
       forfeit:         () => this.forfeit(userId)
     };
@@ -879,6 +982,7 @@ class MonopolyGame {
         username: p.username,
         themeId: p.themeId,
         skin: p.skin,
+        dice: p.dice || { id: DEFAULT_DICE.id, name: DEFAULT_DICE.name, style: DEFAULT_DICE.style },
         color: p.color,
         money: p.money,
         position: p.position,
@@ -898,7 +1002,8 @@ class MonopolyGame {
       trade: this.trade,
       winnerId: this.winnerId,
       lastCard: this.lastCard,
-      log: this.log
+      log: this.log,
+      chat: this.chat
     };
   }
 
@@ -921,14 +1026,16 @@ class MonopolyGame {
       lastCard: this.lastCard,
       log: this.log,
       version: this.version,
-      matchId: this.matchId
+      matchId: this.matchId,
+      chat: this.chat,
+      nextChat: this.nextChat
     }));
   }
 
   load(snapshot) {
     const data = JSON.parse(JSON.stringify(snapshot));
     for (const key of ['phase', 'players', 'hostId', 'properties', 'decks', 'pot', 'turn', 'trade',
-                       'nextTrade', 'winnerId', 'lastCard', 'log', 'version', 'matchId']) {
+                       'nextTrade', 'winnerId', 'lastCard', 'log', 'version', 'matchId', 'chat', 'nextChat']) {
       if (key in data) this[key] = data[key];
     }
   }
@@ -938,12 +1045,22 @@ class MonopolyGame {
     if (this.phase !== 'finished') return null;
     return {
       matchId: this.matchId,
-      players: this.players.map(p => ({
-        userId: p.id,
-        won: p.id === this.winnerId,
-        propertiesBought: p.stats ? p.stats.bought : 0,
-        buildingsBuilt: p.stats ? p.stats.built : 0
-      }))
+      players: this.players.map(p => {
+        const s = p.stats || {};
+        const stats = {};
+        for (const k of MATCH_STATS) stats[k] = Number(s[k]) || 0;
+        // Compatibilidad con estados replicados por versiones anteriores
+        if (s.bought) stats.propertiesBought += s.bought;
+        if (s.built) stats.buildingsBuilt += s.built;
+        return {
+          userId: p.id,
+          themeId: p.themeId,
+          won: p.id === this.winnerId,
+          propertiesBought: stats.propertiesBought,
+          buildingsBuilt: stats.buildingsBuilt,
+          stats
+        };
+      })
     };
   }
 
@@ -958,7 +1075,11 @@ class MonopolyGame {
       themes: THEMES,
       rarities: RARITIES,
       stats: STATS,
+      defaultDice: DEFAULT_DICE,
+      playerColors: PLAYER_COLORS,
+      chatMaxLength: CHAT_MAX_LEN,
       economy: {
+        groupRentMultiplier: eco.GROUP_RENT_MULTIPLIER,
         currency: eco.CURRENCY,
         startingMoney: eco.STARTING_MONEY,
         salary: eco.SALARY,
@@ -980,4 +1101,4 @@ class MonopolyGame {
   }
 }
 
-module.exports = { MonopolyGame, GameError, TURN_TIMEOUT_MS, RECONNECT_GRACE_MS };
+module.exports = { MonopolyGame, GameError, TURN_TIMEOUT_MS, RECONNECT_GRACE_MS, MATCH_STATS };

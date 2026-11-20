@@ -201,7 +201,7 @@ test('acciones fuera de etapa no cambian el estado', () => {
 });
 
 // ── Taller 6: fichas, misiones y replicación ─────────────────────────────────
-const { THEMES, isUnlocked } = require('./themes');
+const { THEMES, isSkinUnlocked, isDiceUnlocked, isItemUnlocked } = require('./themes');
 
 test('se puede elegir una ficha de la temática y se rechaza una ajena', () => {
   const g = new MonopolyGame({ rng: scriptedRng() });
@@ -210,15 +210,68 @@ test('se puede elegir una ficha de la temática y se rechaza una ajena', () => {
   assert.throws(() => g.handle('2', 'p2', 'join', { themeId: 'tema_david', skinId: 'santiago_samsa' }), /no pertenece/);
 });
 
-test('cada temática tiene exactamente una ficha inicial y misiones en las demás', () => {
+test('cada temática tiene una ficha inicial, misiones en las demás y 4 dados', () => {
   for (const t of THEMES) {
     assert.equal(t.skins.filter(s => s.starter).length, 1, t.id);
+    assert.equal(t.dice.length, 4, t.id);
     for (const s of t.skins.filter(x => !x.starter)) {
       assert.ok(s.unlock && s.unlock.count > 0, s.id);
-      assert.equal(isUnlocked(s, {}), false);
-      assert.equal(isUnlocked(s, { [s.unlock.stat]: s.unlock.count }), true);
+      assert.equal(isSkinUnlocked(t, s, {}), false);
     }
+    for (const d of t.dice) assert.equal(isDiceUnlocked(d.id, {}), false, d.id);
   }
+  assert.equal(isDiceUnlocked('dado_clasico', {}), true);
+});
+
+test('las fichas de un grupo se liberan en orden y solo con el progreso de ese grupo', () => {
+  const t = THEMES[0];
+  const second = t.skins[2];
+  // Cumple la misión de la 3.ª ficha, pero no la de la 2.ª → sigue bloqueada
+  const onlyThird = { themes: { [t.id]: { [second.unlock.stat]: second.unlock.count } } };
+  assert.equal(isSkinUnlocked(t, second, onlyThird), false);
+  const both = { themes: { [t.id]: { [t.skins[1].unlock.stat]: 99, [second.unlock.stat]: second.unlock.count } } };
+  assert.equal(isSkinUnlocked(t, second, both), true);
+  // El progreso de OTRO grupo no cuenta
+  const other = { themes: { [THEMES[1].id]: both.themes[t.id] } };
+  assert.equal(isItemUnlocked(t, t.skins, 1, other), false);
+});
+
+test('contraoferta: quien recibe la reemplaza y el otro puede aceptarla', () => {
+  const { g, rng, a, b } = newGame();
+  rng.dice.push(1, 2);
+  g.handle(a.id, '', 'roll');
+  g.handle(a.id, '', 'buy');
+  const sid = Object.keys(g.properties).find(k => g.properties[k].ownerId === a.id);
+  g.handle(a.id, '', 'trade_propose', { toId: b.id, offer: { properties: [Number(sid)] }, request: { money: 500 } });
+  const first = g.trade.id;
+  g.handle(b.id, '', 'trade_counter', { tradeId: first, offer: { money: 200 }, request: { properties: [Number(sid)] } });
+  assert.equal(g.trade.fromId, b.id);
+  assert.equal(g.trade.toId, a.id);
+  assert.throws(() => g.handle(b.id, '', 'trade_respond', { tradeId: g.trade.id, accept: true }), /no es para ti/);
+  const moneyA = a.money;
+  g.handle(a.id, '', 'trade_respond', { tradeId: g.trade.id, accept: true });
+  assert.equal(g.properties[sid].ownerId, b.id);
+  assert.equal(a.money, moneyA + 200);
+  assert.equal(a.stats.tradesDone, 1);
+});
+
+test('chat: guarda mensajes limpios y rechaza vacíos', () => {
+  const { g, a } = newGame();
+  g.handle(a.id, 'p1', 'chat', { text: '  hola\n mundo  ' });
+  assert.equal(g.chat.at(-1).text, 'hola mundo');
+  assert.throws(() => g.handle(a.id, 'p1', 'chat', { text: '   ' }), /vacío/);
+  g.handle('99', 'espectador', 'chat', { text: 'buena jugada' });
+  assert.equal(g.chat.at(-1).spectator, true);
+});
+
+test('join respeta el color pedido si está libre y asigna otro si no', () => {
+  const g = new MonopolyGame({ rng: scriptedRng() });
+  g.handle('1', 'p1', 'join', { themeId: 'tema_david', color: '#ec4899', diceId: 'dado_sith' });
+  g.handle('2', 'p2', 'join', { themeId: 'tema_david', color: '#EC4899' });
+  assert.equal(g.getPlayer('1').color, '#ec4899');
+  assert.notEqual(g.getPlayer('2').color, '#ec4899');
+  assert.equal(g.getPlayer('1').dice.id, 'dado_sith');
+  assert.equal(g.getPlayer('2').dice.id, 'dado_clasico');
 });
 
 test('serialize/load reproduce la partida completa en otra instancia', () => {
@@ -230,7 +283,7 @@ test('serialize/load reproduce la partida completa en otra instancia', () => {
   copy.load(g.serialize());
   assert.deepEqual(copy.toJSON(), g.toJSON());
   assert.deepEqual(copy.decks, g.decks);
-  assert.equal(copy.getPlayer(a.id).stats.bought, 1);
+  assert.equal(copy.getPlayer(a.id).stats.propertiesBought, 1);
 });
 
 test('al terminar, results() reporta ganador y estadísticas', () => {
