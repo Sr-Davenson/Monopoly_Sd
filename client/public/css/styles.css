@@ -428,6 +428,10 @@ code { font-size: 0.9em; color: var(--gold-2); }
 }
 .auth-badge[data-role="leader"]::before  { background: var(--gold); }
 .auth-badge[data-role="replica"]::before { background: var(--success); }
+.auth-badge[data-role="offline"] { color: var(--danger, #e05252); border-color: var(--danger, #e05252); }
+.auth-badge[data-role="offline"]::before { background: var(--danger, #e05252); animation: auth-blink 1s steps(2) infinite; }
+.auth-badge { transition: border-color .3s, color .3s; }
+@keyframes auth-blink { 50% { opacity: .2; } }
 
 /* ── Dados (compartido: tablero, sala de espera y colección del lobby) ── */
 /* Dado con puntos (3×3) y skin por variables: --die-face1/2, --die-pip, --die-edge, --die-glow */

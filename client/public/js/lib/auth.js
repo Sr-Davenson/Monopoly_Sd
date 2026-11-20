@@ -141,6 +141,7 @@
       }
       node = { ...node, url, authId: out.authId, role: out.role };
       if (out.role === 'leader') { node.leaderUrl = url; node.leaderId = out.authId; }
+      offline = false;
       save();
       discover(url);
       return out;
@@ -180,6 +181,12 @@
     b.className = 'auth-badge';
     b.title = `AUTH_URLS: ${URLS.join(', ')}`;
     const paint = () => {
+      if (offline) {
+        b.dataset.role = 'offline';
+        b.textContent = 'Auth: sin conexión (reintentando…)';
+        b.title = `Ningún auth responde.\nAUTH_URLS: ${URLS.join(', ')}`;
+        return;
+      }
       const role = node.role === 'leader' ? 'líder' : node.role === 'replica' ? 'réplica' : '…';
       b.dataset.role = node.role || 'unknown';
       b.textContent = `Auth: ${node.authId || node.url} (${role})`;
@@ -190,13 +197,38 @@
     document.body.append(b);
   }
 
-  // Al cargar: preguntar /status para que la insignia muestre el estado real
+  // Preguntar /status al cargar y luego cada 3 s: en el lobby y en la partida
+  // casi todo va por el WebSocket del coordinador, así que sin este sondeo la
+  // insignia no se enteraría de que el auth se cayó, de que se cambió a otro
+  // o de que una réplica pasó a líder (solo al recargar la página).
+  const POLL_MS = 3000;
+  let offline = false;
+  let polling = false;
   async function refresh() {
-    try { await request('/status'); } catch { /* insignia queda como estaba */ }
+    if (polling) return;
+    polling = true;
+    try {
+      const out = await round('/status', { method: 'GET', leader: false });
+      const d = out.data || {};
+      const changed = offline || (d.leaderId && d.leaderId !== node.leaderId);
+      offline = false;
+      if (d.leaderId) { node.leaderId = d.leaderId; node.leaderUrl = d.leaderUrl ? clean(d.leaderUrl) : node.leaderUrl; }
+      else if (d.electionInProgress) { node.leaderId = null; node.leaderUrl = null; }
+      if (changed) save();
+    } catch {
+      if (!offline) { offline = true; save(); }
+    } finally {
+      polling = false;
+    }
+  }
+  function startPolling() {
+    refresh();
+    setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { mountBadge(); refresh(); });
-  else { mountBadge(); refresh(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { mountBadge(); startPolling(); });
+  else { mountBadge(); startPolling(); }
 
   window.AuthApi = {
     URLS,
