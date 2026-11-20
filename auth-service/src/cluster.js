@@ -55,7 +55,8 @@ const state = {
   lastLeaderContact: Date.now(),        // arrancamos esperando un latido
   electionDeadline: 0,
   votes: new Set(),
-  syncing: null                         // { at } mientras espera sync_response
+  syncing: null,                        // { at } mientras espera sync_response
+  solo: false                           // líder "en solitario": no ve a ningún otro auth
 };
 let heartbeatTimer = null;
 
@@ -140,6 +141,7 @@ function status() {
   return {
     authId: SELF,
     role: state.role,
+    solo: state.solo,
     publicUrl: config.PUBLIC_URL,
     peerUrl: config.PEER_URL,
     leaderUrl: leaderUrl(),
@@ -189,6 +191,7 @@ function stepDown(reason) {
   if (isLeader()) log('CLUSTER', `${SELF} deja de ser líder: ${reason}`);
   state.role = 'replica';
   state.candidate = false;
+  state.solo = false;
   if (state.leaderId === SELF) state.leaderId = null;
   clearInterval(heartbeatTimer);
   heartbeatTimer = null;
@@ -197,12 +200,15 @@ function stepDown(reason) {
   scheduleElection(config.ELECTION_TIMEOUT_MS);
 }
 
-function becomeLeader() {
+function becomeLeader(solo = false) {
   state.role = 'leader';
   state.candidate = false;
   state.leaderId = SELF;
   state.leaderLastSeq = store.lastSeq();
-  log('ELECTION', `★ ${SELF} es el NUEVO LÍDER (term ${state.term}, ${state.votes.size}/${CLUSTER_SIZE} votos, lastSeq ${store.lastSeq()})`);
+  state.solo = solo && CLUSTER_SIZE > 1;
+  log('ELECTION', state.solo
+    ? `★ ${SELF} no ve a ningún otro auth: se reconoce LÍDER EN SOLITARIO (term ${state.term}, lastSeq ${store.lastSeq()}) hasta que entren los demás`
+    : `★ ${SELF} es el NUEVO LÍDER (term ${state.term}, ${state.votes.size}/${CLUSTER_SIZE} votos, lastSeq ${store.lastSeq()})`);
   broadcast({ type: 'new_leader', leader: SELF });
   hooks.onPromoted();
   sendHeartbeat();
@@ -229,12 +235,25 @@ function sendHeartbeat() {
   broadcast({ type: 'heartbeat', authId: SELF, lastSeq });
   broadcast({ type: 'directory', coordinators: hooks.snapshot() });
 
-  // Un líder que no ve a la mayoría durante un timeout entero se baja: así,
-  // si quedó aislado, no sigue aceptando escrituras mientras los demás eligen.
   if (CLUSTER_SIZE > 1) {
     const now = Date.now();
     const alive = 1 + [...peers.values()].filter(p => now - (p.lastAckAt || 0) < config.ELECTION_TIMEOUT_MS).length;
-    if (alive < MAJORITY) {
+    // Sin ningún otro auth enlazado: sigue como líder en solitario (no hay con
+    // quién formar mayoría, y bajarse dejaría el sistema sin escrituras).
+    if (peers.size === 0) {
+      if (!state.solo) log('CLUSTER', `${SELF} se quedó sin pares: sigue como LÍDER EN SOLITARIO hasta que entren los demás`);
+      state.solo = true;
+      state.isolatedSince = null;
+      return;
+    }
+    if (state.solo && alive >= MAJORITY) {
+      state.solo = false;
+      log('CLUSTER', `${SELF} ya ve a la mayoría (${alive}/${CLUSTER_SIZE}): deja el modo en solitario`);
+    }
+    // Un líder que ve a otros pero no a la mayoría durante un timeout entero se
+    // baja: así, si quedó aislado, no sigue aceptando escrituras mientras los
+    // demás eligen.
+    if (alive < MAJORITY && !state.solo) {
       state.isolatedSince = state.isolatedSince || now;
       if (now - state.isolatedSince > config.ELECTION_TIMEOUT_MS) {
         state.isolatedSince = null;
@@ -258,6 +277,8 @@ function startElection() {
   scheduleElection(2000);          // si no gano en ~2 s (empate), reintento
   log('ELECTION', `${SELF} no oye al líder: me postulo en term ${state.term} (lastSeq ${store.lastSeq()}, necesito ${MAJORITY}/${CLUSTER_SIZE})`);
   if (state.votes.size >= MAJORITY) return becomeLeader();      // clúster de 1
+  // Nadie más está en línea: no hay a quién pedir votos → líder en solitario.
+  if (peers.size === 0) return becomeLeader(true);
   broadcast({ type: 'election', candidate: SELF, lastSeq: store.lastSeq(), lastTerm: store.lastTerm() });
 }
 
@@ -314,11 +335,14 @@ function propose(build) {
   log('REPL', `Escritura #${entry.seq} (${entry.op}) aplicada en el líder; propagando a ${peers.size} réplica(s)`);
   broadcast({ type: 'write_propagate', seq: entry.seq, op: entry.op, data: entry.data });
 
-  const needed = MAJORITY - 1;
+  // ACKs necesarios: la mayoría, pero nunca más réplicas de las que están
+  // enlazadas (en solitario no se espera a nadie).
+  const needed = Math.min(MAJORITY - 1, peers.size);
   if (needed <= 0) return Promise.resolve({ ok: true, entry, acks: [] });
 
   return new Promise((resolve) => {
     const pending = {
+      needed,
       acks: new Set(),
       finish(ok) {
         if (!pendingAcks.has(entry.seq)) return;
@@ -337,7 +361,7 @@ function onWriteAck(msg) {
   for (const [seq, p] of pendingAcks) {
     if (msg.seq >= seq) {
       p.acks.add(msg.authId);
-      if (p.acks.size >= MAJORITY - 1) {
+      if (p.acks.size >= p.needed) {
         log('REPL', `Escritura #${seq} confirmada por ${[...p.acks].join(', ')} → se responde al cliente`);
         p.finish(true);
       }
@@ -484,11 +508,39 @@ function attach(ws, outbound, expectedId) {
       known.set(peer.authId, { publicUrl: msg.publicUrl, peerUrl: msg.peerUrl, lastSeenAt: Date.now() });
       log('MESH', `Enlazado con ${peer.authId} (${msg.role}, term ${msg.term}, lastSeq ${msg.lastSeq}, ${outbound ? 'saliente' : 'entrante'})`);
 
+      // ¿Su log está más al día que el mío? (lastTerm, luego lastSeq)
+      const cmp = ((msg.lastTerm ?? 0) - store.lastTerm()) || ((msg.lastSeq ?? 0) - store.lastSeq());
+
+      if (isLeader()) {
+        // Dos líderes a la vez (p. ej. ambos arrancaron solos) o un recién
+        // llegado con datos que yo no tengo: manda el log más al día; empate →
+        // term mayor; empate → id menor. Ambos lados llegan a la misma decisión.
+        const theyWin = msg.role === 'leader'
+          ? cmp > 0 || (cmp === 0 && (msg.term > state.term || (msg.term === state.term && msg.authId < SELF)))
+          : state.solo && cmp > 0;
+        if (theyWin) {
+          stepDown(msg.role === 'leader'
+            ? `me reencontré con el líder ${peer.authId}, que tiene el log más al día`
+            : `${peer.authId} trae un log más al día; que gane la elección`);
+          observeTerm(msg.term);
+          if (msg.role === 'leader' && msg.term >= state.term) followLeader(peer.authId, msg.term, msg.lastSeq);
+        } else {
+          // Sigo siendo líder: si el otro trae un term mayor, lo supero para que me siga
+          if (msg.term >= state.term && (msg.role === 'leader' || msg.term > state.term)) {
+            state.term = msg.term + 1;
+            state.votedFor = SELF;
+            persistTerm();
+            log('CLUSTER', `${SELF} sigue como líder ante ${peer.authId}: paso a term ${state.term}`);
+            broadcast({ type: 'new_leader', leader: SELF });
+          }
+          sendHeartbeat();    // que el recién llegado sepa ya quién manda
+        }
+        return;
+      }
+
       observeTerm(msg.term);
       if (msg.role === 'leader' && msg.term >= state.term) {
         followLeader(peer.authId, msg.term, msg.lastSeq);
-      } else if (isLeader()) {
-        sendHeartbeat();    // que la réplica nueva sepa ya quién manda
       }
       return;
     }
