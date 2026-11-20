@@ -1,12 +1,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // PROGRESO Y MISIONES (desbloqueo de fichas)
-//   GET  /me/progress            (JWT de usuario)
-//   POST /internal/match-result  (JWT de servicio de un coordinador)
+//   GET  /me/progress            (JWT de usuario)                 lectura
+//   POST /internal/match-result  (JWT de servicio de coordinador) ESCRITURA → líder
 // ─────────────────────────────────────────────────────────────────────────────
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const { config } = require('../config');
-const { db, stmts } = require('../db');
+const { stmts } = require('../db');
+const cluster = require('../cluster');
+const { refuse, leaderOnly, freshRead } = require('./cluster');
 
 const { JWT_SECRET } = config;
 const router = express.Router();
@@ -28,7 +30,7 @@ function bearer(req) {
 
 // GET /me/progress — lo llama el cliente (y el coordinador en nombre del
 // cliente, reenviando su JWT) para saber qué fichas tiene desbloqueadas.
-router.get('/me/progress', (req, res) => {
+router.get('/me/progress', freshRead, (req, res) => {
   try {
     const payload = jwt.verify(bearer(req) || '', JWT_SECRET);
     if (!payload.userId || payload.role) throw new Error('no es un token de usuario');
@@ -41,7 +43,7 @@ router.get('/me/progress', (req, res) => {
 // POST /internal/match-result — lo llama el coordinador cuando termina una
 // partida. Se autentica con un JWT de servicio { role: 'coordinator' } firmado
 // con el mismo JWT_SECRET (un usuario no puede fabricarlo).
-router.post('/internal/match-result', (req, res) => {
+router.post('/internal/match-result', leaderOnly, async (req, res) => {
   let service;
   try {
     service = jwt.verify(bearer(req) || '', JWT_SECRET);
@@ -57,23 +59,28 @@ router.post('/internal/match-result', (req, res) => {
   }
 
   const clamp = (n) => Math.max(0, Math.min(1000, Math.floor(Number(n) || 0)));
-  const record = db.transaction(() => {
-    const inserted = stmts.insertMatch.run(matchId, String(roomId || ''), String(service.coordinatorId || ''));
-    if (inserted.changes === 0) return false; // ya estaba reportada
-    for (const p of players) {
-      if (!p || !stmts.findById.get(Number(p.userId))) continue;
-      stmts.addStats.run({
-        userId: Number(p.userId),
-        won: p.won ? 1 : 0,
-        bought: clamp(p.propertiesBought),
-        built: clamp(p.buildingsBuilt)
-      });
-    }
-    return true;
+  const out = await cluster.propose(() => {
+    if (stmts.findMatch.get(matchId)) return { error: 'duplicate' };   // ya estaba reportada
+    return {
+      op: 'match_result',
+      data: {
+        matchId,
+        roomId: String(roomId || ''),
+        reportedBy: String(service.coordinatorId || ''),
+        finished_at: new Date().toISOString(),
+        players: players.filter(p => p && p.userId != null).map(p => ({
+          userId: Number(p.userId),
+          won: p.won ? 1 : 0,
+          bought: clamp(p.propertiesBought),
+          built: clamp(p.buildingsBuilt)
+        }))
+      }
+    };
   });
 
-  const counted = record();
-  console.log(`[AUTH] Partida ${matchId} (${roomId}) reportada por ${service.coordinatorId}: ${counted ? 'registrada' : 'duplicada, ignorada'}`);
+  if (!out.ok && !(out.result && out.result.error === 'duplicate')) return refuse(res, out.refusal);
+  const counted = out.ok;
+  console.log(`[AUTH] Partida ${matchId} (${roomId}) reportada por ${service.coordinatorId}: ${counted ? `registrada (seq #${out.entry.seq})` : 'duplicada, ignorada'}`);
   return res.json({ ok: true, counted });
 });
 
