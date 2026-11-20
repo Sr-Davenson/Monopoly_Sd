@@ -12,7 +12,12 @@
 const { config } = require('./config');
 
 const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
-const clean = (u) => String(u).replace(/\/+$/, '');
+const clean = (u) => {
+  if (!u) return '';
+  let s = String(u).trim().replace(/\/+$/, '');
+  if (/^https?\/\//i.test(s)) s = s.replace(/^https?\/\//i, (m) => m.toLowerCase().startsWith('https') ? 'https://' : 'http://');
+  return s;
+};
 
 // ── Descubrimiento de los demás auths ─────────────────────────────────────────
 // Basta con UNA URL en AUTH_URLS: cada vez que un auth responde se le pide

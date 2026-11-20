@@ -32,7 +32,12 @@ const { values: args, positionals } = parseArgs({
 // carpeta), la identidad del .env se ignora para que no la compartan.
 const fromCli = Boolean(args.port || positionals[0]);
 const envId   = (name) => (fromCli ? undefined : process.env[name]);
-const clean   = (u) => (u ? String(u).replace(/\/+$/, '') : u);
+const clean   = (u) => {
+  if (!u) return u;
+  let s = String(u).trim().replace(/\/+$/, '');
+  if (/^https?\/\//i.test(s)) s = s.replace(/^https?\/\//i, (m) => m.toLowerCase().startsWith('https') ? 'https://' : 'http://');
+  return s;
+};
 
 const PORT = Number(args.port || positionals[0] || process.env.PORT || process.env.COORDINATOR_PORT || 5000);
 
@@ -49,7 +54,7 @@ const config = {
   COORDINATOR_ID: args.id || envId('COORDINATOR_ID') || defaultId(),
   // Taller 7: lista de auth-services replicados (ver src/auth.js)
   AUTH_URLS:      String(args['auth-urls'] || args['auth-url'] || process.env.AUTH_URLS || process.env.AUTH_URL ||
-                    'http://localhost:4001,http://localhost:4002,http://localhost:4003')
+                    'http://localhost:4000,http://localhost:4001,http://localhost:4002,http://localhost:4003')
                     .split(',').map(s => clean(s.trim())).filter(Boolean),
   JWT_SECRET:     process.env.JWT_SECRET,
 

@@ -16,9 +16,14 @@ const cors = require('cors');
 const PORT = Number(process.env.PORT || 3000);
 // Taller 7: lista de auth-services replicados (separados por coma).
 // AUTH_URL (uno solo) sigue funcionando por compatibilidad.
-const clean = (u) => String(u).trim().replace(/\/+$/, '');
+const clean = (u) => {
+  if (!u) return '';
+  let s = String(u).trim().replace(/\/+$/, '');
+  if (/^https?\/\//i.test(s)) s = s.replace(/^https?\/\//i, (m) => m.toLowerCase().startsWith('https') ? 'https://' : 'http://');
+  return s;
+};
 const CONFIGURED = String(process.env.AUTH_URLS || process.env.AUTH_URL ||
-  'http://localhost:4001,http://localhost:4002,http://localhost:4003')
+  'http://localhost:4000,http://localhost:4001,http://localhost:4002,http://localhost:4003')
   .split(',').map(clean).filter(Boolean);
 
 // ── Descubrimiento de los demás auths ────────────────────────────────────────

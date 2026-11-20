@@ -16,9 +16,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
   const cfg = window.APP_CONFIG || {};
-  const clean = (u) => String(u).trim().replace(/\/+$/, '');
+  const clean = (u) => {
+    if (!u) return '';
+    let s = String(u).trim().replace(/\/+$/, '');
+    if (/^https?\/\//i.test(s)) s = s.replace(/^https?\/\//i, (m) => m.toLowerCase().startsWith('https') ? 'https://' : 'http://');
+    return s;
+  };
   const CONFIGURED = (Array.isArray(cfg.AUTH_URLS) && cfg.AUTH_URLS.length ? cfg.AUTH_URLS
-    : cfg.AUTH_URL ? String(cfg.AUTH_URL).split(',') : ['http://localhost:4001', 'http://localhost:4002', 'http://localhost:4003'])
+    : cfg.AUTH_URL ? String(cfg.AUTH_URL).split(',') : ['http://localhost:4000', 'http://localhost:4001', 'http://localhost:4002', 'http://localhost:4003'])
     .map(clean).filter(Boolean);
   const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
   const STORE_KEY = 'auth_node';
