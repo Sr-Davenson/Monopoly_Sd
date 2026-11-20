@@ -23,6 +23,7 @@ const { clients, world, peers, rooms, directory, log, send, localBroadcast } = r
 const { MonopolyGame, GameError, RECONNECT_GRACE_MS } = require('../game/monopoly');
 const broadcast = require('./broadcast');
 const mesh = require('./mesh');
+const { authFetch } = require('./auth');
 
 const { COORDINATOR_ID } = config;
 const ROOM_ID_RE = /^sala-[a-z0-9-]{4,48}$/;
@@ -367,14 +368,16 @@ async function reportResults(room) {
   if (!results || !results.matchId || reportedMatches.has(results.matchId)) return;
   reportedMatches.add(results.matchId);
   try {
-    const res = await fetch(`${config.AUTH_URL}/internal/match-result`, {
+    // Escritura replicada: va al líder del clúster de auth (auth.js reorienta)
+    const res = await authFetch('/internal/match-result', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${mesh.serviceToken()}`, 'ngrok-skip-browser-warning': 'true' },
-      body: JSON.stringify({ roomId: room.id, ...results }),
-      signal: AbortSignal.timeout(3000)
+      leader: true,
+      headers: { Authorization: `Bearer ${mesh.serviceToken()}` },
+      body: { roomId: room.id, ...results },
+      timeout: 5000
     });
-    const body = await res.json().catch(() => ({}));
-    log('MISSIONS', `Resultado de ${room.name} reportado (${res.status}${body.counted === false ? ', ya estaba' : ''})`);
+    if (!res.ok) throw new Error(`${res.status} ${res.data.error || ''}`.trim());
+    log('MISSIONS', `Resultado de ${room.name} reportado a ${res.authId || res.url} (${res.status}${res.data.counted === false ? ', ya estaba' : ''})`);
     const ids = new Set(results.players.map(p => p.userId));
     localBroadcast({ type: 'progress_changed', data: {} }, c => ids.has(c.userId));
   } catch (err) {
@@ -385,12 +388,9 @@ async function reportResults(room) {
 
 async function fetchProgress(token) {
   try {
-    const res = await fetch(`${config.AUTH_URL}/me/progress`, {
-      headers: { Authorization: `Bearer ${token}`, 'ngrok-skip-browser-warning': 'true' },
-      signal: AbortSignal.timeout(2500)
-    });
+    const res = await authFetch('/me/progress', { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) return null;
-    return (await res.json()).stats || null;
+    return res.data.stats || null;
   } catch {
     return null;
   }

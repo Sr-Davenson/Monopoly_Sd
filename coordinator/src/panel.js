@@ -16,6 +16,7 @@ const { clients, world, peers, rooms, directory, stats, events } = require('./st
 const roomSvc = require('./rooms');
 const mesh = require('./mesh');
 const ngrok = require('./ngrok');
+const authClient = require('./auth');
 
 const PANEL_DIR = path.join(__dirname, '..', 'panel');
 
@@ -57,13 +58,14 @@ function panelData() {
       port: config.PORT,
       publicUrl: config.getPublicUrl(),
       peerUrl: config.getPeerUrl(),
-      authUrl: config.AUTH_URL,
+      authUrl: config.AUTH_URLS.join(', '),
+      auth: authClient.describe(),
       uptime: Math.round((now - config.STARTED_AT) / 1000),
       leader: mesh.isLeader(),
       localPlayers: clients.size
     },
     ngrok: ngrok.status,
-    directory: { ok: directory.ok, error: directory.error, updatedMsAgo: directory.updatedAt ? now - directory.updatedAt : null },
+    directory: { ok: directory.ok, heartbeatOk: directory.heartbeatOk, leader: directory.leader, error: directory.error, updatedMsAgo: directory.updatedAt ? now - directory.updatedAt : null },
     coordinators,
     rooms: roomSvc.roomsSummary().map(r => ({
       id: r.id, name: r.name, host: r.host, status: r.status,
