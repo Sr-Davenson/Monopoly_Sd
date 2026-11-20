@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Panel del auth</title>
+  <link rel="stylesheet" href="panel.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="who">
+      <span class="kicker">Cuatro Mundos · Auth-service replicado</span>
+      <h1 id="self-id">…</h1>
+    </div>
+    <div class="chips">
+      <span class="chip" id="chip-role" data-state="pending">Rol: …</span>
+      <span class="chip" id="chip-term" data-state="pending">Term: …</span>
+      <span class="chip" id="chip-leader" data-state="pending">Líder: …</span>
+      <span class="chip" id="chip-sync" data-state="pending">Datos: …</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card self">
+      <h2>Este auth</h2>
+      <dl class="facts">
+        <dt>URL pública (clientes y coordinadores)</dt><dd><code id="self-public">…</code></dd>
+        <dt>URL de pares (mesh de auths)</dt><dd><code id="self-peer">…</code></dd>
+        <dt>Líder actual (leaderUrl)</dt><dd><code id="self-leader-url">…</code></dd>
+        <dt>Último seq aplicado</dt><dd id="self-seq">…</dd>
+        <dt>Usuarios en la BD local</dt><dd id="self-users">…</dd>
+        <dt>Mayoría necesaria</dt><dd id="self-majority">…</dd>
+        <dt>Consistencia</dt><dd id="self-consistency" class="small">…</dd>
+        <dt>Activo desde hace</dt><dd id="self-uptime">…</dd>
+      </dl>
+      <div class="beat" id="beat">
+        <div class="beat-label"><span id="beat-text">…</span><span class="muted" id="beat-hint"></span></div>
+        <div class="beat-bar"><span id="beat-fill"></span></div>
+      </div>
+      <div id="warning" class="warning" hidden></div>
+    </section>
+
+    <section class="card network">
+      <div class="card-head">
+        <h2>Auth-services del clúster</h2>
+        <span class="muted" id="network-count"></span>
+      </div>
+      <p class="muted small">Cada tarjeta muestra lo que ese auth dice de sí mismo (<code>GET /status</code>) y si este auth tiene enlace mesh con él. Al matar al líder, mira cómo las réplicas pasan a <strong>sin líder</strong>, se postulan y una queda como <strong>líder</strong> con un term nuevo.</p>
+      <div id="nodes" class="coord-grid"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Usuarios (BD local)</h2>
+        <span class="muted small" id="users-count"></span>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Id</th><th>Usuario</th><th>Proveedor</th><th>Creado</th></tr></thead>
+          <tbody id="users"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Log de replicación</h2>
+        <span class="muted small">últimas entradas</span>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Seq</th><th>Term</th><th>Operación</th><th>Detalle</th></tr></thead>
+          <tbody id="log"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card wide">
+      <div class="card-head">
+        <h2>Eventos recientes</h2>
+        <span class="muted small" id="events-count"></span>
+      </div>
+      <div class="events-filter" id="events-filter"></div>
+      <ol id="events" class="events"></ol>
+    </section>
+  </main>
+
+  <script src="panel.js"></script>
+</body>
+</html>

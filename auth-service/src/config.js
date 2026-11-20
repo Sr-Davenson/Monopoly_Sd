@@ -24,7 +24,8 @@ const { values: args } = parseArgs({
     'peer-url':  { type: 'string' },
     cluster:     { type: 'string' },
     db:          { type: 'string' },
-    seed:        { type: 'string' }
+    seed:        { type: 'string' },
+    'no-panel':  { type: 'boolean' }     // no abrir el panel en el navegador
   }
 });
 
@@ -73,6 +74,9 @@ const config = {
   // BD heredada para sembrar un nodo NUEVO (todos los nodos copian la misma,
   // así arrancan con el mismo log). Solo se usa si DB_PATH no existe todavía.
   SEED_DB: args.seed ? root(args.seed) : (process.env.SEED_DB ? root(process.env.SEED_DB) : null),
+
+  // Panel del auth (http://localhost:<puerto>/): se abre solo al arrancar
+  OPEN_PANEL: !args['no-panel'] && process.env.OPEN_PANEL !== '0',
 
   // Directorio de coordinadores
   HEARTBEAT_TTL_MS: Number(process.env.HEARTBEAT_TTL_MS || 3000),   // 3 latidos de 1 s
