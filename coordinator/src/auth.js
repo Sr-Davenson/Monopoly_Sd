@@ -14,6 +14,36 @@ const { config } = require('./config');
 const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
 const clean = (u) => String(u).replace(/\/+$/, '');
 
+// ── Descubrimiento de los demás auths ─────────────────────────────────────────
+// Basta con UNA URL en AUTH_URLS: cada vez que un auth responde se le pide
+// GET /peers (cada 15 s como mucho), que trae la URL pública de todos los del
+// clúster. Si el auth de siempre se cae, el coordinador ya conoce a los demás.
+// Las del .env van primero y nunca se quitan; las descubiertas se reemplazan.
+const CONFIGURED = [...config.AUTH_URLS];
+const DISCOVER_EVERY_MS = 15000;
+const isLocalUrl = (u) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(u);
+let discovered = [];
+let lastDiscover = 0;
+
+async function discover(fromUrl) {
+  if (Date.now() - lastDiscover < DISCOVER_EVERY_MS) return;
+  lastDiscover = Date.now();
+  try {
+    const res = await fetch(`${fromUrl}/peers`, { headers: HEADERS, signal: AbortSignal.timeout(2500) });
+    if (!res.ok) return;
+    const { peers = [] } = await res.json();
+    // URLs localhost de otro PC no sirven aquí, salvo que el .env ya use localhost
+    const localOk = CONFIGURED.some(isLocalUrl);
+    const urls = peers.map(p => p && p.publicUrl).filter(u => typeof u === 'string' && /^https?:\/\//.test(u))
+      .map(clean).filter(u => localOk || !isLocalUrl(u));
+    if (!urls.length) return;
+    const added = urls.filter(u => !config.AUTH_URLS.includes(u));
+    discovered = urls;
+    config.AUTH_URLS.splice(0, config.AUTH_URLS.length, ...new Set([...CONFIGURED, ...discovered]));
+    if (added.length) console.log(`[AUTH] Auths descubiertos: ${added.join(', ')}`);
+  } catch { /* se reintenta en el próximo ciclo */ }
+}
+
 const state = {
   current: config.AUTH_URLS[0],   // último auth que respondió
   currentId: null,
@@ -79,6 +109,7 @@ async function authFetch(path, { method = 'GET', headers = {}, body, leader = fa
     }
     remember(url, res);
     state.lastError = null;
+    discover(url);
     return out;
   }
 

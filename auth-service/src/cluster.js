@@ -22,6 +22,7 @@
 //   vote             { voter, term, voteGranted }               → candidato
 //   new_leader       { leader, term }                           ganador → todos
 //   directory        { coordinators:[...] }                     líder → réplicas (soft state)
+//   public_url       { authId, publicUrl }                      cambió mi URL pública (túnel ngrok)
 //
 // Reglas de seguridad (estilo Raft, simplificado):
 //   · Gana quien junte MAYORÍA de votos del clúster (2 de 3). Así nunca hay
@@ -471,6 +472,13 @@ function onMessage(peer, msg) {
       return onWriteAck(msg);
     case 'request_sync':  return onRequestSync(peer, msg);
     case 'sync_response': return onSyncResponse(peer, msg);
+    case 'public_url':
+      if (typeof msg.publicUrl === 'string' && /^https?:\/\//.test(msg.publicUrl)) {
+        peer.publicUrl = msg.publicUrl;
+        known.set(peer.authId, { ...(known.get(peer.authId) || {}), publicUrl: msg.publicUrl, lastSeenAt: Date.now() });
+        log('MESH', `${peer.authId} ahora es público en ${msg.publicUrl}`);
+      }
+      break;
     case 'directory':
       if (msg.term >= state.term && peer.authId === state.leaderId) hooks.applySnapshot(msg.coordinators || []);
       break;
@@ -639,11 +647,16 @@ function electionInfo() {
   };
 }
 
+// Mi URL pública cambió (se detectó o se perdió el túnel de ngrok)
+function announcePublicUrl() {
+  broadcast({ type: 'public_url', authId: SELF, publicUrl: config.PUBLIC_URL });
+}
+
 function shutdown() {
   for (const p of peers.values()) { try { p.ws.close(1001, 'apagando'); } catch {} }
 }
 
 module.exports = {
   start, shutdown, status, peerList, isLeader, leaderUrl, propose, writeRefusal, readRefusal,
-  setDirectoryHooks, lag, electionInfo, SELF
+  setDirectoryHooks, lag, electionInfo, announcePublicUrl, SELF
 };

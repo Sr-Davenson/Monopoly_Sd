@@ -17,12 +17,51 @@
 (function () {
   const cfg = window.APP_CONFIG || {};
   const clean = (u) => String(u).trim().replace(/\/+$/, '');
-  const URLS = (Array.isArray(cfg.AUTH_URLS) && cfg.AUTH_URLS.length ? cfg.AUTH_URLS
+  const CONFIGURED = (Array.isArray(cfg.AUTH_URLS) && cfg.AUTH_URLS.length ? cfg.AUTH_URLS
     : cfg.AUTH_URL ? String(cfg.AUTH_URL).split(',') : ['http://localhost:4001', 'http://localhost:4002', 'http://localhost:4003'])
     .map(clean).filter(Boolean);
   const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
   const STORE_KEY = 'auth_node';
+  const PEERS_KEY = 'auth_peers_discovered';
+  const DISCOVER_EVERY_MS = 15000;
   const listeners = new Set();
+
+  // ── Descubrimiento de los demás auths ──────────────────────────────────────
+  // Basta con UNA URL en el .env: cada vez que un auth responde se le pide
+  // GET /peers, que trae la URL pública (túnel ngrok) de todos los del clúster.
+  // Se guardan en localStorage, así si el auth de siempre se cae (incluso al
+  // recargar la página) el cliente ya conoce a los demás y se pasa a ellos.
+  const isLocalPage = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  const isLocalUrl = (u) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(u);
+  let discovered = [];
+  try { discovered = (JSON.parse(localStorage.getItem(PEERS_KEY)) || []).map(clean).filter(Boolean); } catch { /* sin storage */ }
+  const URLS = [];
+  // Las del .env primero y siempre; luego las descubiertas (se reemplazan en
+  // cada descubrimiento, así no se acumulan URLs de túneles viejos).
+  function rebuild() {
+    URLS.splice(0, URLS.length, ...new Set([...CONFIGURED, ...discovered]));
+  }
+  rebuild();
+
+  let lastDiscover = 0;
+  async function discover(fromUrl) {
+    if (Date.now() - lastDiscover < DISCOVER_EVERY_MS) return;
+    lastDiscover = Date.now();
+    try {
+      const res = await fetch(`${fromUrl}/peers`, { headers: HEADERS, cache: 'no-store', signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined });
+      if (!res.ok) return;
+      const { peers = [] } = await res.json();
+      const urls = peers.map(p => p && p.publicUrl).filter(u => typeof u === 'string' && /^https?:\/\//.test(u))
+        .map(clean).filter(u => isLocalPage || !isLocalUrl(u));
+      if (!urls.length) return;
+      const added = urls.filter(u => !URLS.includes(u));
+      discovered = urls;
+      try { localStorage.setItem(PEERS_KEY, JSON.stringify(discovered)); } catch { /* sin storage */ }
+      rebuild();
+      if (added.length) console.log(`[AUTH] Auths descubiertos: ${added.join(', ')}`);
+      listeners.forEach(fn => { try { fn(node); } catch { /* ignore */ } });
+    } catch { /* se reintenta en la próxima petición */ }
+  }
 
   let node = load() || { url: URLS[0], authId: null, role: null, leaderUrl: null, leaderId: null };
   if (!URLS.includes(node.url)) node.url = URLS[0];
@@ -79,6 +118,7 @@
       node = { ...node, url, authId: out.authId, role: out.role };
       if (out.role === 'leader') { node.leaderUrl = url; node.leaderId = out.authId; }
       save();
+      discover(url);
       return out;
     }
     if (last) return last;

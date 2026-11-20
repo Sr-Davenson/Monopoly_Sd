@@ -65,6 +65,7 @@ server.listen(config.PORT, () => {
   console.log(`[DIRECTORY] Directorio de coordinadores activo (TTL de heartbeat: ${config.HEARTBEAT_TTL_MS} ms)`);
   console.log(`[PANEL] Panel del auth: http://localhost:${config.PORT}/`);
   cluster.start(server);
+  require('./src/ngrok').start(() => cluster.announcePublicUrl());
   panel.openInBrowser();
 });
 

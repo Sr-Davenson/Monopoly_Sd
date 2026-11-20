@@ -57,6 +57,8 @@ const config = {
   PORT,
   PEER_PORT,
   PUBLIC_URL: clean(args['public-url'] || envId('PUBLIC_URL')) || `http://localhost:${PORT}`,
+  // Sin --public-url se detecta el túnel de ngrok del puerto (ver ngrok.js)
+  PUBLIC_URL_FIXED: Boolean(args['public-url'] || envId('PUBLIC_URL')),
   PEER_URL:   clean(args['peer-url'] || envId('PEER_URL'))     || `ws://localhost:${PEER_PORT}`,
   // Pares del clúster (sin uno mismo). Vacío = nodo único, líder de inmediato.
   PEERS: cluster.filter(p => p.authId !== AUTH_ID),
