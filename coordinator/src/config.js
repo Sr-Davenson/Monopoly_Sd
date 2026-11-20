@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuración del coordinador (línea de comandos > .env > valores por defecto)
 //
-//   node index.js --id coord-david --port 5001 --auth-url https://xxx.ngrok-free.app
+//   node index.js --id coord-david --port 5001 --auth-urls https://a.ngrok-free.app,https://b.ngrok-free.app,https://c.ngrok-free.app
 //   node index.js --id coord-david --port 5001 --ngrok      (abre el túnel solo)
 //
 // La mesh entre coordinadores usa el MISMO puerto que los clientes (ruta /peer),
@@ -19,7 +19,8 @@ const { values: args, positionals } = parseArgs({
     port:         { type: 'string' },
     'public-url': { type: 'string' },
     'peer-url':   { type: 'string' },
-    'auth-url':   { type: 'string' },
+    'auth-url':   { type: 'string' },    // uno o varios, separados por coma
+    'auth-urls':  { type: 'string' },    // alias de --auth-url (Taller 7)
     ngrok:        { type: 'boolean' },   // lanzar `ngrok http <port>` automáticamente
     'no-panel':   { type: 'boolean' },   // no abrir el panel en el navegador
     'peer-port':  { type: 'string' },    // obsoleto: la mesh ya va por el puerto de clientes
@@ -46,7 +47,10 @@ function defaultId() {
 const config = {
   PORT,
   COORDINATOR_ID: args.id || envId('COORDINATOR_ID') || defaultId(),
-  AUTH_URL:       clean(args['auth-url'] || process.env.AUTH_URL || 'http://localhost:4000'),
+  // Taller 7: lista de auth-services replicados (ver src/auth.js)
+  AUTH_URLS:      String(args['auth-urls'] || args['auth-url'] || process.env.AUTH_URLS || process.env.AUTH_URL ||
+                    'http://localhost:4001,http://localhost:4002,http://localhost:4003')
+                    .split(',').map(s => clean(s.trim())).filter(Boolean),
   JWT_SECRET:     process.env.JWT_SECRET,
 
   // URLs anunciadas al directorio. Pueden cambiar en caliente si se detecta

@@ -45,13 +45,18 @@
     $('self-id').textContent = d.self.coordinatorId;
     $('self-public').textContent = d.self.publicUrl;
     $('self-peer').textContent = d.self.peerUrl;
-    $('self-auth').textContent = d.self.authUrl;
+    const a = d.self.auth || {};
+    $('self-auth').textContent = a.currentId ? `${a.currentId} · ${a.current}` : (a.current || d.self.authUrl);
+    $('self-auth-leader').textContent = a.leaderId ? `${a.leaderId} · ${a.leaderUrl}` : (a.leaderUrl || 'desconocido (¿elección en curso?)');
+    $('self-auth-list').textContent = (a.urls || []).join(', ');
     $('self-port').textContent = d.self.port;
     $('self-players').textContent = d.self.localPlayers;
     $('self-uptime').textContent = duration(d.self.uptime);
 
     setChip('chip-directory', d.directory.ok ? 'ok' : d.directory.ok === false ? 'bad' : 'warn',
-      d.directory.ok ? 'Directorio: registrado' : d.directory.ok === false ? 'Directorio: sin conexión' : 'Directorio: …');
+      d.directory.ok && d.directory.heartbeatOk ? 'Directorio: registrado'
+        : d.directory.ok ? 'Directorio: sin líder (reintentando)'
+        : d.directory.ok === false ? 'Directorio: sin conexión' : 'Directorio: …');
     const ng = d.ngrok || {};
     setChip('chip-ngrok',
       ng.state === 'activo' || ng.state === 'manual' ? 'ok' : ng.state === 'perdido' ? 'bad' : 'warn',
@@ -65,7 +70,9 @@
         el('code', {}, `ngrok http ${d.self.port}`), ' (se detecta solo) o reinicia con ', el('code', {}, '--ngrok'), '.'));
     }
     if (d.directory.ok === false) {
-      warn.push(el('div', {}, `No se pudo hablar con el auth-service (${d.directory.error}). Revisa `, el('code', {}, '--auth-url'), '.'));
+      warn.push(el('div', {}, `No se pudo hablar con ningún auth-service (${d.directory.error}). Revisa `, el('code', {}, '--auth-urls'), '.'));
+    } else if (d.directory.heartbeatOk === false) {
+      warn.push(el('div', {}, `El heartbeat no llega a un líder (${d.directory.error}). Si hay una elección en curso se arregla solo en unos segundos.`));
     }
     if (ng.error) warn.push(el('div', {}, `ngrok: ${ng.error}`));
     $('warning').hidden = !warn.length;
