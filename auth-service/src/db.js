@@ -159,6 +159,20 @@ function entriesFrom(fromSeq) {
   return stmts.entriesFrom.all(fromSeq).map(r => ({ seq: r.seq, term: r.term, op: r.op, data: JSON.parse(r.data) }));
 }
 function userCount() { return stmts.countUsers.get().n; }
+
+// Para el panel (sin hashes ni datos sensibles)
+const recentUsersStmt = db.prepare('SELECT id, username, provider, created_at FROM users ORDER BY id DESC LIMIT ?');
+const logTailStmt = db.prepare('SELECT seq, term, op, data FROM replication_log ORDER BY seq DESC LIMIT ?');
+function recentUsers(n = 12) { return recentUsersStmt.all(n); }
+function logTail(n = 12) {
+  return logTailStmt.all(n).map(r => {
+    const d = JSON.parse(r.data);
+    const detail = d.username ? `${d.username} (id ${d.userId})`
+      : d.matchId ? `partida ${d.matchId}${d.players ? ` · ${d.players.length} jugadores` : ''}`
+      : d.userId ? `usuario ${d.userId}` : '';
+    return { seq: r.seq, term: r.term, op: r.op, detail };
+  });
+}
 function getMeta(key, fallback = null) { const r = stmts.getMeta.get(key); return r ? r.value : fallback; }
 function setMeta(key, value) { stmts.setMeta.run(key, value == null ? null : String(value)); }
 
@@ -192,5 +206,5 @@ function setMeta(key, value) { stmts.setMeta.run(key, value == null ? null : Str
 
 module.exports = {
   db, stmts, applyEntry, applyMany, resetAndApply,
-  lastSeq, lastTerm, termAt, entriesFrom, userCount, getMeta, setMeta
+  lastSeq, lastTerm, termAt, entriesFrom, userCount, getMeta, setMeta, recentUsers, logTail
 };

@@ -61,6 +61,9 @@ let heartbeatTimer = null;
 
 // authId → { ws, authId, publicUrl, peerUrl, role, term, lastSeq, lastAckAt, outbound }
 const peers = new Map();
+// Lo último que supimos de cada par aunque ya no haya enlace (para el panel)
+// authId → { publicUrl, peerUrl, lastSeenAt }
+const known = new Map();
 // Escrituras esperando confirmación de réplicas (opción B): seq → { acks, resolve, timer }
 const pendingAcks = new Map();
 
@@ -158,9 +161,10 @@ function peerList() {
   const out = [{ authId: SELF, publicUrl: config.PUBLIC_URL, peerUrl: config.PEER_URL, role: state.role, self: true, lastSeq: store.lastSeq() }];
   for (const [authId, url] of peerConfig) {
     const p = peers.get(authId);
+    const k = known.get(authId);
     out.push({
       authId,
-      publicUrl: p ? p.publicUrl : null,
+      publicUrl: p ? p.publicUrl : (k ? k.publicUrl : null),
       peerUrl: p ? p.peerUrl : url,
       role: p ? (authId === state.leaderId ? 'leader' : 'replica') : 'unreachable',
       connected: Boolean(p),
@@ -477,6 +481,7 @@ function attach(ws, outbound, expectedId) {
       peer = { ws, authId: msg.authId, publicUrl: msg.publicUrl, peerUrl: msg.peerUrl, role: msg.role,
                lastSeq: msg.lastSeq, lastAckAt: Date.now(), outbound };
       peers.set(peer.authId, peer);
+      known.set(peer.authId, { publicUrl: msg.publicUrl, peerUrl: msg.peerUrl, lastSeenAt: Date.now() });
       log('MESH', `Enlazado con ${peer.authId} (${msg.role}, term ${msg.term}, lastSeq ${msg.lastSeq}, ${outbound ? 'saliente' : 'entrante'})`);
 
       observeTerm(msg.term);
@@ -494,6 +499,7 @@ function attach(ws, outbound, expectedId) {
     clearTimeout(helloTimer);
     if (peer && peers.get(peer.authId) === peer) {
       peers.delete(peer.authId);
+      if (known.has(peer.authId)) known.get(peer.authId).lastSeenAt = Date.now();
       log('MESH', `Se perdió el enlace con ${peer.authId}${peer.authId === state.leaderId ? ' (era el LÍDER)' : ''}`);
     }
   });
@@ -562,11 +568,30 @@ function start(httpServer) {
   setInterval(tick, 250).unref();
 }
 
+// Detalles del proceso de elección, para el panel
+function electionInfo() {
+  const now = Date.now();
+  return {
+    isLeader: isLeader(),
+    candidate: state.candidate,
+    votes: state.candidate ? [...state.votes] : [],
+    votedFor: state.votedFor,
+    msSinceLeader: isLeader() ? 0 : now - state.lastLeaderContact,
+    nextElectionInMs: !isLeader() && !state.leaderId ? Math.max(0, state.electionDeadline - now) : null,
+    heartbeatMs: config.LEADER_HEARTBEAT_MS,
+    electionTimeoutMs: config.ELECTION_TIMEOUT_MS,
+    majority: MAJORITY,
+    clusterSize: CLUSTER_SIZE,
+    syncing: Boolean(state.syncing),
+    peersSeen: Object.fromEntries([...peers.values()].map(p => [p.authId, { lastAckMsAgo: p.lastAckAt ? now - p.lastAckAt : null, outbound: p.outbound }]))
+  };
+}
+
 function shutdown() {
   for (const p of peers.values()) { try { p.ws.close(1001, 'apagando'); } catch {} }
 }
 
 module.exports = {
   start, shutdown, status, peerList, isLeader, leaderUrl, propose, writeRefusal, readRefusal,
-  setDirectoryHooks, lag, SELF
+  setDirectoryHooks, lag, electionInfo, SELF
 };

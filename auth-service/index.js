@@ -12,7 +12,10 @@
 //   routes/auth.js       /register · /login · /auth/google
 //   routes/directory.js  /heartbeat · /coordinator (balanceo) · /coordinators · /coordinator-peers
 //   routes/progress.js   /me/progress · /internal/match-result
+//   panel.js + panel/    panel del auth en http://localhost:<puerto>/ (solo local)
+//   events.js            eventos recientes (copia de la consola) para el panel
 // ─────────────────────────────────────────────────────────────────────────────
+require('./src/events');               // primero: copia la consola al panel
 const http = require('node:http');
 const express = require('express');
 const cors = require('cors');
@@ -48,6 +51,10 @@ app.use(require('./src/routes/auth'));
 app.use(require('./src/routes/directory'));
 app.use(require('./src/routes/progress'));
 
+// Panel (solo local). Va AL FINAL: se monta en "/" y no debe tapar las rutas.
+const panel = require('./src/panel');
+panel.mount(app);
+
 const server = http.createServer(app);
 server.on('error', (err) => {
   console.error(`[AUTH] No se pudo abrir el puerto ${config.PORT}: ${err.message}`);
@@ -56,7 +63,9 @@ server.on('error', (err) => {
 server.listen(config.PORT, () => {
   console.log(`[AUTH] ${config.AUTH_ID} en http://localhost:${config.PORT} (pública: ${config.PUBLIC_URL}) · BD: ${config.DB_PATH} · JWT expira en ${config.JWT_EXPIRES_IN}`);
   console.log(`[DIRECTORY] Directorio de coordinadores activo (TTL de heartbeat: ${config.HEARTBEAT_TTL_MS} ms)`);
+  console.log(`[PANEL] Panel del auth: http://localhost:${config.PORT}/`);
   cluster.start(server);
+  panel.openInBrowser();
 });
 
 function shutdown() {
