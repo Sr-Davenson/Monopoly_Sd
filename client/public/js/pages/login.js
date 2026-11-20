@@ -31,13 +31,28 @@ const DEFAULT_GOOGLE_CLIENT_ID = '786041305351-sj20hhmusecqdqtg9qactcnjqcq3o3ta.
 
 // Configuración tomada de variables de entorno (.env vía config.js)
 const config = window.APP_CONFIG || {
-  AUTH_URL: 'http://localhost:4000',
   GOOGLE_CLIENT_ID: DEFAULT_GOOGLE_CLIENT_ID
 };
 
-function getAuthUrl() {
-  return (config.AUTH_URL || 'http://localhost:4000').replace(/\/+$/, '');
+// Taller 7: el auth está replicado. AuthApi (js/lib/auth.js) prueba los auths
+// de AUTH_URLS, sigue al líder ante 503 not_leader y reintenta durante una
+// elección (unos segundos sin líder). Escrituras (registro) → leader: true.
+async function authPost(path, body, { leader = false, alertFn = showAlert } = {}) {
+  const r = await AuthApi.request(path, {
+    method: 'POST', body, leader, rounds: 6,
+    onWait: (msg) => alertFn(msg, 'warning')
+  });
+  return { res: { ok: r.ok, status: r.status }, data: r.data };
 }
+
+function authErrorText(data, fallback) {
+  if (data && data.error === 'no_leader') return 'Los auth-services están eligiendo un nuevo líder. Intenta de nuevo en unos segundos.';
+  if (data && data.error === 'not_leader') return 'No se pudo llegar al auth líder. Intenta de nuevo en unos segundos.';
+  if (data && data.error === 'replication_timeout') return 'El registro no se pudo confirmar en las réplicas. Intenta de nuevo (si ya existe, inicia sesión).';
+  return (data && data.error) || fallback;
+}
+
+const NO_AUTH = () => `No se pudo conectar a ningún auth-service (${AuthApi.URLS.join(', ')})`;
 
 function getGoogleClientId() {
   const id = (config && config.GOOGLE_CLIENT_ID) ? config.GOOGLE_CLIENT_ID.trim() : '';
@@ -87,26 +102,19 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
   }
 
   try {
-    const res = await fetch(`${getAuthUrl()}/register`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true'
-      },
-      body: JSON.stringify({ username, password })
-    });
-    const data = await res.json();
+    // Registrar es una ESCRITURA: la atiende el auth líder
+    const { res, data } = await authPost('/register', { username, password }, { leader: true });
 
     if (!res.ok) {
-      return showAlert(data.error || `Error ${res.status} al registrar usuario`, 'error');
+      return showAlert(authErrorText(data, `Error ${res.status} al registrar usuario`), 'error');
     }
 
-    showAlert(`Usuario "${data.username}" creado con éxito. Ya puedes iniciar sesión.`, 'success');
+    showAlert(`Usuario "${data.username}" creado con éxito en ${AuthApi.describe()}. Ya puedes iniciar sesión.`, 'success');
     document.getElementById('login-username').value = data.username;
     document.getElementById('login-password').value = '';
     document.getElementById('register-form').reset();
   } catch (err) {
-    showAlert(`No se pudo conectar al Servicio de Auth en ${getAuthUrl()}`, 'error');
+    showAlert(NO_AUTH(), 'error');
   }
 });
 
@@ -121,25 +129,18 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
   }
 
   try {
-    const res = await fetch(`${getAuthUrl()}/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true'
-      },
-      body: JSON.stringify({ username, password })
-    });
-    const data = await res.json();
+    // Login es una LECTURA: la puede atender una réplica al día
+    const { res, data } = await authPost('/login', { username, password });
 
     if (!res.ok) {
-      return showAlert(data.error || 'Credenciales inválidas', 'error');
+      return showAlert(authErrorText(data, 'Credenciales inválidas'), 'error');
     }
 
     localStorage.setItem('token', data.token);
     localStorage.setItem('username', data.username);
     window.location.href = 'lobby.html';
   } catch (err) {
-    showAlert(`No se pudo conectar al Servicio de Auth en ${getAuthUrl()}`, 'error');
+    showAlert(NO_AUTH(), 'error');
   }
 });
 
@@ -205,15 +206,8 @@ async function handleGoogleCredentialResponse(response) {
   pendingGoogleIdToken = idToken;
 
   try {
-    const res = await fetch(`${getAuthUrl()}/auth/google`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true'
-      },
-      body: JSON.stringify({ idToken })
-    });
-    const data = await res.json();
+    // Lectura (usuario existente): cualquier auth al día puede responder
+    const { res, data } = await authPost('/auth/google', { idToken });
 
     // 200: Usuario existente o autenticado directamente
     if (res.status === 200 && data.token) {
@@ -230,10 +224,10 @@ async function handleGoogleCredentialResponse(response) {
     }
 
     if (!res.ok) {
-      showAlert(data.error || 'Error al autenticar con Google.', 'error');
+      showAlert(authErrorText(data, 'Error al autenticar con Google.'), 'error');
     }
   } catch (err) {
-    showAlert(`No se pudo conectar con el Servicio de Auth en ${getAuthUrl()}`, 'error');
+    showAlert(NO_AUTH(), 'error');
   }
 }
 
@@ -269,18 +263,10 @@ document.getElementById('google-username-form').addEventListener('submit', async
   }
 
   try {
-    const res = await fetch(`${getAuthUrl()}/auth/google`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true'
-      },
-      body: JSON.stringify({
-        idToken: pendingGoogleIdToken,
-        username: username
-      })
-    });
-    const data = await res.json();
+    // Crear la cuenta Google es una ESCRITURA: la atiende el auth líder
+    const { res, data } = await authPost('/auth/google',
+      { idToken: pendingGoogleIdToken, username },
+      { leader: true, alertFn: showModalAlert });
 
     if (res.status === 409 && data.error === 'username_taken') {
       return showModalAlert('Ese nombre de usuario ya está registrado. Por favor elige otro.', 'error');
@@ -293,7 +279,7 @@ document.getElementById('google-username-form').addEventListener('submit', async
       return;
     }
 
-    showModalAlert(data.error || 'Error al completar el registro con Google', 'error');
+    showModalAlert(authErrorText(data, 'Error al completar el registro con Google'), 'error');
   } catch (err) {
     showModalAlert(`Error de conexión: ${err.message}`, 'error');
   }

@@ -2,7 +2,7 @@
 // Conexión con los coordinadores.
 //
 // El cliente hace dos pasos antes de jugar:
-//   1. GET {AUTH_URL}/coordinator   → { coordinatorId, publicUrl }
+//   1. GET {auth}/coordinator   → { coordinatorId, publicUrl }   (cualquier auth de AUTH_URLS)
 //        · sin parámetros: el coordinador MENOS cargado (balanceo de carga)
 //        · ?prefer=coord-a: ese coordinador si está vivo (anfitrión de una sala)
 //        · ?exclude=coord-b: cualquiera menos el que acaba de fallar
@@ -21,9 +21,8 @@
 // manipulado) y 4004 (sala inválida) son definitivos: no se reintenta.
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
-  const cfg = window.APP_CONFIG || {};
-  const AUTH_URL = (cfg.AUTH_URL || 'http://localhost:4000').replace(/\/+$/, '');
-  const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
+  // Taller 7: las peticiones al auth pasan por AuthApi (lib/auth.js), que
+  // prueba la lista AUTH_URLS y sigue al líder cuando hace falta.
   const FATAL_CODES = new Set([4001, 4002, 4003, 4004]);
   // 4010 → la sala vive en otro coordinador · 4011 → rebalanceo de carga
   const REDIRECT = { 4010: /^host:(.+)$/, 4011: /^move:(.+)$/ };
@@ -33,23 +32,19 @@
     if (exclude) qs.set('exclude', exclude);
     if (prefer) qs.set('prefer', prefer);
     const q = qs.toString() ? `?${qs}` : '';
-    const res = await fetch(`${AUTH_URL}/coordinator${q}`, { headers: HEADERS, cache: 'no-store' });
-    const body = await res.json().catch(() => ({}));
+    const res = await AuthApi.request(`/coordinator${q}`);
     if (!res.ok) {
-      const err = new Error(body.error || `HTTP ${res.status}`);
+      const err = new Error(res.data.error || `HTTP ${res.status}`);
       err.status = res.status;
       throw err;
     }
-    return body;
+    return { ...res.data, authId: res.authId };
   }
 
   async function fetchProgress(token) {
-    const res = await fetch(`${AUTH_URL}/me/progress`, {
-      headers: { ...HEADERS, Authorization: `Bearer ${token}` },
-      cache: 'no-store'
-    });
+    const res = await AuthApi.request('/me/progress', { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return (await res.json()).stats;
+    return res.data.stats;
   }
 
   // opts = {
@@ -186,5 +181,5 @@
     4004: 'Esa sala no existe.'
   };
 
-  window.Net = { AUTH_URL, requestCoordinator, fetchProgress, connectCoordinator, goToLogin, FATAL_MESSAGES };
+  window.Net = { requestCoordinator, fetchProgress, connectCoordinator, goToLogin, FATAL_MESSAGES };
 })();

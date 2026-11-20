@@ -399,3 +399,32 @@ code { font-size: 0.9em; color: var(--gold-2); }
   body { padding: 1.25rem 1rem 2rem; }
   .card { padding: 1.2rem; }
 }
+
+/* ── Taller 7: a qué auth-service está conectado el cliente ───────────────── */
+.auth-badge {
+  position: fixed;
+  left: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 50;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: var(--font-body);
+  pointer-events: auto;
+  user-select: none;
+}
+.auth-badge::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+  vertical-align: middle;
+}
+.auth-badge[data-role="leader"]::before  { background: var(--gold); }
+.auth-badge[data-role="replica"]::before { background: var(--success); }
