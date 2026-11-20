@@ -34,8 +34,27 @@ let tradeDraft = emptyDraft();
 
 const WORLD_COLOR = { david: 'var(--galaxy)', jossef: 'var(--fantasy)', sebastian: 'var(--viking)', santiago: 'var(--letters)' };
 
-// Utilidades de DOM compartidas (js/lib/dom.js)
+// Utilidades de DOM compartidas (js/lib/dom.js) e iconos SVG (js/lib/icons.js)
 const { $, el } = Dom;
+const icon = (name, cls) => Icons.svg(name, cls);
+const clean = Icons.clean;
+// Botón con icono + texto (el icono refuerza la acción, el texto la nombra)
+const ibtn = (name, label, attrs = {}) => el('button', { type: 'button', ...attrs }, icon(name), el('span', {}, label));
+
+// Iconos fijos del HTML
+(function paintStaticIcons() {
+  for (const a of document.querySelectorAll('[data-icon]')) a.prepend(icon(a.dataset.icon));
+  $('zoom-in').append(icon('plus'));
+  $('zoom-out').append(icon('minus'));
+  $('zoom-fit').append(icon('fit'));
+  $('view-3d').append(icon('cube'), el('span', {}, '3D'));
+  $('table-toggle').append(icon('chevron'));
+  $('chat-toggle').prepend(icon('chat'));
+  document.querySelector('.icon-btn-send').append(icon('send'));
+  $('trade-win-close').append(icon('close'));
+  document.querySelector('.float-win-grip').append(icon('grip'));
+  $('trade-btn').prepend(icon('trade'));
+})();
 
 function money(n) {
   const sym = config ? config.economy.currency.symbol : '¤';
@@ -88,13 +107,13 @@ function tokenOf(skin, size, color) {
 function themeOfSkin(skin) {
   return config.themes.find(t => t.skins.some(s => s.id === skin.id)) || null;
 }
-function isUnlocked(skin) {
+function isUnlocked(skin, prog = progress) {
   if (skin.starter || !skin.unlock) return true;
   const theme = themeOfSkin(skin);
-  return !!theme && Collection.skinUnlocked(theme, theme.skins.find(s => s.id === skin.id), progress);
+  return !!theme && Collection.skinUnlocked(theme, theme.skins.find(s => s.id === skin.id), prog);
 }
-function isDiceUnlocked(diceId) {
-  return Collection.diceUnlocked(config, diceId, progress);
+function isDiceUnlocked(diceId, prog = progress) {
+  return Collection.diceUnlocked(config, diceId, prog);
 }
 
 // ── Consultas sobre el estado ────────────────────────────────────────────────
@@ -153,9 +172,10 @@ function gridPos(i) {
   return { row: 1 + (i - 30), col: 11 };
 }
 
+// Icono SVG por tipo de casilla (las propiedades se reconocen por su franja de color)
 const SPACE_ICONS = {
-  start: '⚑', jail: '⛓', rest: '🍺', go_to_jail: '⚔',
-  card_general: '📜', card_special: '✶', donation: '♥', transport: '⇄', service: '⚡'
+  start: 'flag', jail: 'bars', rest: 'cup', go_to_jail: 'gavel',
+  card_general: 'card', card_special: 'star', donation: 'heart', transport: 'train', service: 'bolt'
 };
 
 const TYPE_LABELS = {
@@ -212,11 +232,10 @@ function renderBoard() {
     const parts = [];
     if (s.type === 'property') {
       parts.push(el('div', { class: 'strip', '--group-color': config.groups[s.group].color }));
-      if (s.icon) parts.push(el('div', { class: 'sicon', 'aria-hidden': 'true' }, s.icon));
-    } else {
-      parts.push(el('div', { class: 'sicon', 'aria-hidden': 'true' }, s.icon || SPACE_ICONS[s.type] || ''));
+    } else if (SPACE_ICONS[s.type]) {
+      parts.push(el('div', { class: `sicon sicon-${s.type}` }, icon(SPACE_ICONS[s.type])));
     }
-    parts.push(el('div', { class: 'name' }, s.name));
+    parts.push(el('div', { class: 'name' }, clean(s.name)));
 
     if (prop && prop.level > 0) {
       const b = el('div', { class: 'buildings' });
@@ -408,7 +427,8 @@ function renderTokens(turnId) {
     if (!a || a.skinId !== p.skin.id) {
       if (a) a.wrap.remove();
       const art = tokenOf(p.skin, '', p.color);
-      const wrap = el('div', { class: 'ptoken fresh' }, art);
+      // .ptoken se desplaza; .ptoken-stand la pone de pie en la vista 3D
+      const wrap = el('div', { class: 'ptoken fresh', '--tc': p.color }, el('div', { class: 'ptoken-stand' }, art));
       requestAnimationFrame(() => requestAnimationFrame(() => wrap.classList.remove('fresh')));
       layer.append(wrap);
       a = { wrap, art, skinId: p.skin.id, shown: a ? a.shown : p.position, target: a ? a.target : p.position, busy: false, inJail: p.inJail };
@@ -454,12 +474,37 @@ const BoardView = (() => {
     ty = sh <= vh ? (vh - sh) / 2 : Math.min(margin, Math.max(vh - sh - margin, ty));
   }
 
+  // Nitidez: mientras se hace zoom o se arrastra, el escenario va en su propia
+  // capa (fluido); al soltar se quita `will-change` para que el navegador lo
+  // vuelva a dibujar a la escala real. Con la capa fija el texto se veía
+  // pixelado al acercar, porque se estiraba la imagen dibujada al 100 %.
+  let settleTimer = null;
+  function moving() {
+    stage.classList.add('moving');
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => stage.classList.remove('moving'), 180);
+  }
+
   function apply() {
     clamp();
-    stage.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    moving();
+    // Posiciones enteras: evita el desenfoque de medio píxel
+    stage.style.transform = `translate(${Math.round(tx)}px, ${Math.round(ty)}px) scale(${scale})`;
     $('zoom-level').textContent = `${Math.round((scale / fitScale) * 100)}%`;
     vp.classList.toggle('zoomed', scale > fitScale * 1.01);
   }
+
+  // Vista 3D (tablero inclinado, fichas de pie) o plana. Se recuerda.
+  let is3d = true;
+  try { is3d = localStorage.getItem('board_3d') !== '0'; } catch { /* sin storage */ }
+  function set3d(on) {
+    is3d = on;
+    vp.classList.toggle('is-3d', on);
+    $('view-3d').setAttribute('aria-pressed', String(on));
+    try { localStorage.setItem('board_3d', on ? '1' : '0'); } catch { /* sin storage */ }
+  }
+  set3d(is3d);
+  $('view-3d').addEventListener('click', () => set3d(!is3d));
 
   function resize() {
     const vw = vp.clientWidth, vh = vp.clientHeight;
@@ -533,6 +578,7 @@ const BoardView = (() => {
     if (ev.key === '+' || ev.key === '=') zoomAt(1.2, ...center());
     else if (ev.key === '-') zoomAt(1 / 1.2, ...center());
     else if (ev.key === '0') fit();
+    else if (ev.key === 'v' || ev.key === 'V') set3d(!is3d);
   });
   if (window.ResizeObserver) new ResizeObserver(() => resize()).observe(vp);
   window.addEventListener('resize', resize);
@@ -548,8 +594,8 @@ function renderCenter() {
 
   if (state.phase === 'finished') {
     const w = state.winnerId && playerById(state.winnerId);
-    info.replaceChildren(el('strong', {}, w ? `🏆 ¡${w.username} gana la partida!` : 'Partida terminada'));
-    if (state.hostId === myId) actions.append(el('button', { class: 'btn btn-success', onclick: () => act('restart') }, 'Nueva partida'));
+    info.replaceChildren(icon('trophy', 'ic-gold'), el('strong', {}, w ? `${w.username} gana la partida` : 'Partida terminada'));
+    if (state.hostId === myId) actions.append(ibtn('counter', 'Nueva partida', { class: 'btn btn-cta', onclick: () => act('restart') }));
     renderDice(null, null);
     $('charge-now').hidden = true;
     renderPot();
@@ -558,10 +604,12 @@ function renderCenter() {
 
   const current = playerById(state.turn.playerId);
   const t = state.turn;
-  const stageText = { roll: 'tira los dados', buy: 'decide si compra', debt: 'debe pagar', end: 'puede gestionar o terminar el turno' }[t.stage];
+  const stageText = { roll: 'tira los dados', buy: 'decide si compra', debt: 'debe pagar', end: 'gestiona su turno' }[t.stage];
   info.replaceChildren(
-    'Turno de ', el('strong', { style: `color:${current.color}` }, current.username), ` — ${stageText}`,
-    current.connected ? '' : ' (desconectado)'
+    el('span', { class: 'turn-dot', '--player-color': current.color }),
+    el('strong', { style: `color:${current.color}` }, current.id === myId ? 'Tu turno' : current.username),
+    el('span', {}, current.id === myId ? '' : ` · ${stageText}`),
+    current.connected ? '' : el('span', { class: 'turn-off' }, ' · desconectado')
   );
 
   renderDice(current, t.dice);
@@ -574,42 +622,45 @@ function renderCenter() {
   }
   renderChargeNow(t);
 
+  // Ley de Fitts y de Hick: una sola acción principal, grande y en el centro;
+  // las secundarias, más pequeñas al lado.
   const mine = me();
   if (!mine) {
-    actions.append(el('span', { class: 'text-muted small' }, 'Partida en curso: estás como espectador.'));
+    actions.append(el('span', { class: 'actions-note' }, icon('eye'), 'Espectador'));
   } else if (isMyTurn()) {
     const e = config.economy;
     if (t.stage === 'roll') {
       if (mine.inJail) {
-        actions.append(
-          el('button', { class: 'btn', onclick: () => act('roll') }, 'Intentar dobles'),
-          el('button', { class: 'btn btn-warning', onclick: () => act('pay_jail'), disabled: mine.money < e.jailFine }, `Pagar multa (${money(e.jailFine)})`)
-        );
-        if (mine.jailCards > 0) actions.append(el('button', { class: 'btn btn-success', onclick: () => act('use_jail_card') }, 'Usar carta de salida'));
+        actions.append(ibtn('dice', 'Intentar dobles', { class: 'btn btn-cta', onclick: () => act('roll') }));
+        actions.append(ibtn('cash', `Pagar ${money(e.jailFine)}`, { class: 'btn btn-secondary', onclick: () => act('pay_jail'), disabled: mine.money < e.jailFine }));
+        if (mine.jailCards > 0) actions.append(ibtn('key', 'Usar carta', { class: 'btn btn-secondary', onclick: () => act('use_jail_card') }));
       } else {
-        actions.append(el('button', { class: 'btn', onclick: () => act('roll') }, '🎲 Tirar dados'));
+        actions.append(ibtn('dice', 'Tirar dados', { class: 'btn btn-cta', onclick: () => act('roll') }));
       }
     } else if (t.stage === 'buy') {
       const s = config.spaces[t.pendingBuy];
       actions.append(
-        el('button', { class: 'btn btn-success', onclick: () => act('buy'), disabled: mine.money < s.price }, `Comprar por ${money(s.price)}`),
-        el('button', { class: 'btn btn-ghost', onclick: () => act('decline') }, 'No comprar')
+        ibtn('tag', `Comprar ${money(s.price)}`, { class: 'btn btn-cta', onclick: () => act('buy'), disabled: mine.money < s.price }),
+        ibtn('close', 'Pasar', { class: 'btn btn-secondary', onclick: () => act('decline') })
       );
-      if (mine.money < s.price) actions.append(el('span', { class: 'small text-muted' }, 'No te alcanza: puedes hipotecar en "Mis propiedades".'));
+      if (mine.money < s.price) actions.append(el('span', { class: 'actions-note warn' }, icon('info'), 'Hipoteca para completar'));
     } else if (t.stage === 'debt') {
       actions.append(
-        el('span', { class: 'small', style: 'color:#fca5a5' }, `Debes ${money(t.debt.total)}. Vende construcciones o hipoteca en "Mis propiedades".`),
-        confirmButton('Declararme en bancarrota', '¿Seguro? Confirmar bancarrota', 'btn btn-danger', () => act('bankrupt'))
+        el('span', { class: 'actions-note bad' }, icon('alert'), `Debes ${money(t.debt.total)}: vende o hipoteca`),
+        confirmButton('Bancarrota', 'Confirmar bancarrota', 'btn btn-danger', () => act('bankrupt'))
       );
     } else if (t.stage === 'end') {
-      actions.append(el('button', { class: 'btn', onclick: () => act('end_turn') }, 'Terminar turno'));
+      actions.append(ibtn('check', 'Terminar turno', { class: 'btn btn-cta', onclick: () => act('end_turn') }));
     }
   } else if (!mine.bankrupt) {
-    actions.append(el('span', { class: 'text-muted small' }, 'Espera tu turno.'));
+    actions.append(el('span', { class: 'actions-note' }, icon('clock'), 'Esperando tu turno'));
   }
 
   if (mine && !mine.bankrupt) {
-    actions.append(confirmButton('Rendirse', '¿Seguro? Confirmar rendición', 'btn btn-ghost btn-small', () => act('forfeit')));
+    const f = confirmButton('Rendirse', 'Confirmar', 'btn btn-quiet', () => act('forfeit'));
+    f.prepend(icon('flag'));
+    f.title = 'Abandonar la partida (pide confirmación)';
+    actions.append(el('div', { class: 'actions-sub' }, f));
   }
 
   renderPot();
@@ -636,10 +687,10 @@ function renderChargeNow(t) {
   const current = playerById(t.playerId);
   let view = null;
   if (t.stage === 'debt' && t.debt) {
-    view = { kind: 'debt', icon: '⚠', label: `${current.username} debe pagar`, amount: t.debt.total, sub: 'Vende construcciones, hipoteca o declárate en bancarrota' };
+    view = { kind: 'debt', icon: 'alert', label: `${current.username} debe pagar`, amount: t.debt.total, sub: 'Vende o hipoteca para cubrirlo' };
   } else if (t.stage === 'buy' && t.pendingBuy !== null) {
     const s = config.spaces[t.pendingBuy];
-    view = { kind: 'buy', icon: '🏷', label: `${s.name} está a la venta`, amount: s.price, sub: `Renta base ${money(s.rents ? s.rents[0] : 0)}` };
+    view = { kind: 'buy', icon: 'tag', label: `${s.name} está a la venta`, amount: s.price, sub: `Renta base ${money(s.rents ? s.rents[0] : 0)}` };
   } else {
     // Último cobro registrado desde que empezó este turno
     const start = state.log.map(l => l.text).lastIndexOf(`Turno de ${current.username}`);
@@ -648,17 +699,17 @@ function renderChargeNow(t) {
       const text = since[i].text;
       let m;
       if ((m = /^(.+) debe pagar (\d+) de renta a (.+)$/.exec(text))) {
-        view = { kind: 'rent', icon: '💸', label: `${m[1]} paga renta a ${m[3]}`, amount: Number(m[2]), sub: 'Renta cobrada en este turno' };
+        view = { kind: 'rent', icon: 'cash', label: `${m[1]} paga renta a ${m[3]}`, amount: Number(m[2]), sub: 'Renta de este turno' };
       } else if ((m = /^(.+) pagó (\d+) y sale del calabozo$/.exec(text)) || (m = /^(.+) cumplió \d+ turnos y paga la multa de (\d+)$/.exec(text))) {
-        view = { kind: 'fine', icon: '⛓', label: `${m[1]} paga la multa`, amount: Number(m[2]), sub: 'Calabozo' };
+        view = { kind: 'fine', icon: 'bars', label: `${m[1]} paga la multa`, amount: Number(m[2]), sub: 'Calabozo' };
       } else if ((m = /^(.+) compró (.+) por (\d+)$/.exec(text))) {
-        view = { kind: 'bought', icon: '🏠', label: `${m[1]} compró ${m[2]}`, amount: Number(m[3]), sub: 'Pagado al banco' };
+        view = { kind: 'bought', icon: 'home', label: `${m[1]} compró ${m[2]}`, amount: Number(m[3]), sub: 'Pagado al banco' };
       }
     }
     if (!view) {
       const s = config.spaces[current.position];
       if (s && s.type === 'donation' && since.some(l => l.text === `${current.username} cae en ${s.name}`)) {
-        view = { kind: 'fine', icon: '♥', label: `${current.username} dona al Fondo`, amount: s.amount, sub: s.name };
+        view = { kind: 'fine', icon: 'heart', label: `${current.username} dona al Fondo`, amount: s.amount, sub: s.name };
       }
     }
   }
@@ -667,7 +718,7 @@ function renderChargeNow(t) {
   box.dataset.kind = view.kind;
   box.style.setProperty('--player-color', current.color);
   box.replaceChildren(
-    el('span', { class: 'charge-icon', 'aria-hidden': 'true' }, view.icon),
+    el('span', { class: 'charge-icon' }, icon(view.icon)),
     el('div', { class: 'charge-text' },
       el('div', { class: 'charge-label' }, view.label),
       el('div', { class: 'charge-amount' }, money(view.amount)),
@@ -676,20 +727,23 @@ function renderChargeNow(t) {
 }
 
 function renderPot() {
-  $('pot').textContent = `Fondo de Donaciones: ${money(state.pot)} (lo cobra quien cae en Descanso)`;
+  const pot = $('pot');
+  pot.title = 'Fondo de Donaciones: se lo lleva quien cae en Descanso';
+  pot.replaceChildren(icon('coins'), el('span', {}, 'Fondo'), el('strong', {}, money(state.pot)));
 
   const c = state.lastCard;
   const box = $('last-card');
   if (!c) { box.hidden = true; return; }
   const who = playerById(c.playerId);
   box.hidden = false;
+  box.dataset.deck = c.deck;
   box.replaceChildren(
-    el('div', { class: 'card-deck' }, `Tarjeta ${c.deck === 'general' ? 'General' : 'Especial'} · ${who ? who.username : ''}`),
-    el('div', { class: 'card-title' }, c.title),
-    el('div', {}, c.text)
+    el('div', { class: 'card-deck' }, icon(c.deck === 'general' ? 'card' : 'star'), `${c.deck === 'general' ? 'General' : 'Especial'} · ${who ? who.username : ''}`),
+    el('div', { class: 'card-title' }, clean(c.title)),
+    el('div', {}, clean(c.text))
   );
   if (c.seq !== lastCardSeq) {
-    if (lastCardSeq !== 0) toast(`${who ? who.username : ''}: ${c.text}`, 'info');
+    if (lastCardSeq !== 0) toast(`${who ? who.username : ''}: ${clean(c.text)}`, 'info');
     lastCardSeq = c.seq;
   }
 }
@@ -701,12 +755,9 @@ function renderPlayers() {
     const theme = config.themes.find(t => t.id === p.themeId);
     const owned = ownedBy(p.id).length;
     const meta = [
-      theme ? theme.name : '',
-      `${owned} prop.`,
+      `${owned} ${owned === 1 ? 'título' : 'títulos'}`,
       p.inJail ? 'en el calabozo' : '',
-      p.jailCards ? `${p.jailCards} carta(s) de salida` : '',
-      '',
-      p.id === state.hostId ? 'anfitrión' : ''
+      p.jailCards ? `${p.jailCards} carta${p.jailCards > 1 ? 's' : ''} de salida` : ''
     ].filter(Boolean).join(' · ');
     return el('li', {
       class: `${state.turn && state.turn.playerId === p.id ? 'turn' : ''} ${p.bankrupt ? 'bankrupt' : ''}`,
@@ -714,7 +765,8 @@ function renderPlayers() {
     },
       tokenOf(p.skin, '', p.color),
       el('div', { class: 'pname' },
-        el('div', {}, p.username, p.id === myId ? ' (tú)' : ''),
+        el('div', { class: 'pname-row', title: theme ? theme.name : '' }, p.username, p.id === myId ? el('span', { class: 'you' }, 'tú') : '',
+          p.id === state.hostId ? el('span', { class: 'host', title: 'Anfitrión de la sala' }, icon('crown')) : ''),
         el('div', { class: 'pmeta' }, meta),
         !p.connected && !p.bankrupt && state.phase === 'playing'
           ? el('div', { class: 'pmeta dc-count', 'data-since': p.disconnectedAt || serverNow() }, 'desconectado')
@@ -741,7 +793,7 @@ function renderSpaceDetail() {
   const rows = [];
   const active = currentRent(s);
   const row = (k, v, key) => rows.push(el('tr', { class: active && key && active.row === key ? 'rent-active' : '' },
-    el('td', {}, k), el('td', {}, v, active && key && active.row === key ? el('span', { class: 'rent-now' }, ' ← se cobra') : '')));
+    el('td', {}, k), el('td', {}, v, active && key && active.row === key ? el('span', { class: 'rent-now' }, 'ahora') : '')));
 
   if (s.price) row('Precio', money(s.price));
   if (s.type === 'property') {
@@ -772,11 +824,14 @@ function renderSpaceDetail() {
   );
 }
 
-// ── La mesa: títulos de propiedad de cada jugador ────────────────────────────
-// Cada propiedad comprada aparece como una carta (al estilo de los títulos del
-// Monopoly) con el estilo de la temática de su sección. La fila de renta que se
-// cobra ahora va resaltada.
-let dealtCards = null;   // "spaceId:ownerId" ya mostradas (para animar las nuevas)
+// ── La mesa: títulos de propiedad ────────────────────────────────────────────
+// Pestañas: "Mis títulos" (por defecto), cada rival y "Todos". Los títulos de
+// un mismo grupo de color van juntos en una sola línea (ley de proximidad), y
+// un título hipotecado se voltea y muestra el reverso, como en el juego físico.
+let dealtCards = null;     // "spaceId:ownerId" ya mostradas (para animar las nuevas)
+let flippedSeen = null;    // "spaceId:ownerId" que ya se mostraban hipotecadas
+let tableView = 'me';      // 'me' | 'all' | id de un jugador
+try { tableView = localStorage.getItem('table_view') || 'me'; } catch { /* sin storage */ }
 
 function deedRows(s) {
   const e = config.economy;
@@ -793,63 +848,193 @@ function deedRows(s) {
   return [];
 }
 
-function deedCard(s, isNew) {
+function buildingsNode(level) {
+  if (!level) return '';
+  return el('div', { class: 'deed-build', title: level === 5 ? 'Hotel' : `${level} casa${level > 1 ? 's' : ''}` },
+    level === 5 ? icon('hotel', 'b-hotel') : Array.from({ length: level }, () => icon('home', 'b-house')));
+}
+
+function deedCard(s, ownerId, isNew, flip) {
   const prop = state.properties[s.id];
   const member = s.memberId ? memberById(s.memberId) : null;
   const rent = currentRent(s);
   const color = s.type === 'property' ? config.groups[s.group].color : (member ? member.color : '#64748b');
   const kind = s.type === 'property' ? 'Título de propiedad' : s.type === 'transport' ? 'Transporte' : 'Servicio';
-  const card = el('button', {
-    type: 'button',
-    class: `deed deed-${member ? member.id : 'neutral'} ${prop.mortgaged ? 'mortgaged' : ''} ${isNew ? 'dealt' : ''} ${selectedSpace === s.id ? 'selected' : ''}`,
-    '--group-color': color,
-    title: `${s.name} — renta actual: ${rent ? rent.text : '—'}`,
-    onclick: () => { selectedSpace = s.id; render(); }
-  },
+  const e = config.economy;
+  const front = el('div', { class: 'deed-face deed-front' },
     el('div', { class: 'deed-head' },
       el('span', { class: 'deed-kind' }, kind),
-      el('span', { class: 'deed-name' }, s.icon ? `${s.icon} ` : '', s.name)),
+      el('span', { class: 'deed-name' }, clean(s.name))),
     el('div', { class: 'deed-now' },
-      el('span', {}, prop.mortgaged ? 'Hipotecada' : 'Cobra ahora'),
-      el('strong', {}, prop.mortgaged ? '—' : rent ? rent.text : '—')),
+      el('span', {}, 'Cobra'),
+      el('strong', {}, rent ? rent.text : '—')),
     el('table', { class: 'deed-rents' }, el('tbody', {}, deedRows(s).map(([k, label, v]) =>
       el('tr', { class: rent && rent.row === k ? 'on' : '' }, el('td', {}, label), el('td', {}, v))))),
-    prop.level > 0 ? el('div', { class: 'deed-build' }, prop.level === 5 ? '🏨 Hotel' : '🏠'.repeat(prop.level)) : '',
-    el('div', { class: 'deed-foot' }, member ? member.world : '', s.price ? ` · ${money(s.price)}` : '')
-  );
-  return card;
+    buildingsNode(prop.level),
+    el('div', { class: 'deed-foot' }, member ? member.world : '', s.price ? ` · ${money(s.price)}` : ''));
+  // Reverso: lo que se ve cuando está hipotecada
+  const back = el('div', { class: 'deed-face deed-back' },
+    el('div', { class: 'deed-back-band' }),
+    el('span', { class: 'deed-back-icon' }, icon('bank')),
+    el('strong', { class: 'deed-back-title' }, 'Hipotecada'),
+    el('span', { class: 'deed-back-name' }, clean(s.name)),
+    el('span', { class: 'deed-back-line' }, 'Recibió ', el('b', {}, money(Math.floor(s.price * e.mortgageRate)))),
+    el('span', { class: 'deed-back-line' }, 'Levantar ', el('b', {}, money(unmortgageCost(s)))),
+    el('span', { class: 'deed-back-foot' }, 'No cobra renta'));
+  return el('button', {
+    type: 'button',
+    class: `deed deed-${member ? member.id : 'neutral'} ${prop.mortgaged ? 'mortgaged' : ''} ${flip || ''} ${isNew ? 'dealt' : ''} ${selectedSpace === s.id ? 'selected' : ''}`,
+    '--group-color': color,
+    title: `${clean(s.name)} · ${prop.mortgaged ? 'hipotecada' : `cobra ${rent ? rent.text : '—'}`}`,
+    onclick: () => { selectedSpace = s.id; render(); }
+  }, el('div', { class: 'deed-inner' }, front, back));
+}
+
+// Agrupa los títulos de un jugador: grupos de color en orden del tablero,
+// luego transportes y servicios.
+function deedSets(ownerId) {
+  const props = ownedBy(ownerId);
+  const sets = new Map();
+  for (const s of props) {
+    const key = s.type === 'property' ? `g${s.group}` : s.type;
+    if (!sets.has(key)) sets.set(key, []);
+    sets.get(key).push(s);
+  }
+  const order = (k) => k === 'transport' ? 1000 : k === 'service' ? 2000 : Number(k.slice(1));
+  return [...sets.entries()].sort((a, b) => order(a[0]) - order(b[0])).map(([key, list]) => {
+    list.sort((a, b) => a.id - b.id);
+    if (key === 'transport' || key === 'service') {
+      const total = config.spaces.filter(x => x.type === key).length;
+      return { key, list, label: key === 'transport' ? 'Transportes' : 'Servicios', color: '#8a8fa3', have: list.length, total };
+    }
+    const g = config.groups[list[0].group];
+    const total = groupSpaces(list[0].group).length;
+    return { key, list, label: g.name, color: g.color, have: list.length, total };
+  });
+}
+
+function renderSets(ownerId, seen, flipped) {
+  const sets = deedSets(ownerId);
+  if (!sets.length) return [el('div', { class: 'seat-empty' }, 'Sin títulos')];
+  return sets.map(set => el('div', { class: `deed-set ${set.have === set.total ? 'complete' : ''}`, '--group-color': set.color },
+    el('div', { class: 'set-head' },
+      el('span', { class: 'set-swatch' }),
+      el('span', { class: 'set-name' }, clean(set.label)),
+      el('span', { class: 'set-count', title: set.have === set.total ? 'Grupo completo' : `${set.have} de ${set.total}` },
+        set.have === set.total ? icon('check') : '', `${set.have}/${set.total}`)),
+    el('div', { class: 'set-cards' }, set.list.map(s => {
+      const key = `${s.id}:${ownerId}`;
+      const mort = state.properties[s.id].mortgaged;
+      seen.add(key);
+      if (mort) flipped.add(key);
+      // Animación de volteo solo cuando cambia el estado de hipoteca
+      const flip = flippedSeen === null ? '' : mort && !flippedSeen.has(key) ? 'flip-in' : !mort && flippedSeen.has(key) ? 'flip-out' : '';
+      return deedCard(s, ownerId, dealtCards !== null && !dealtCards.has(key), flip);
+    }))));
+}
+
+function renderTableTabs() {
+  const mine = me();
+  const players = state.players.filter(p => !p.bankrupt || ownedBy(p.id).length);
+  if (tableView === 'me' && !mine) tableView = 'all';
+  if (tableView !== 'me' && tableView !== 'all' && !players.some(p => p.id === tableView)) tableView = 'me';
+  const tab = (id, label, extra = {}) => el('button', {
+    type: 'button', role: 'tab', class: 'seg-btn', 'aria-selected': String(tableView === id), ...extra,
+    onclick: () => { tableView = id; try { localStorage.setItem('table_view', id); } catch { /* sin storage */ } renderTableCards(); }
+  }, ...label);
+  const tabs = [];
+  if (mine) tabs.push(tab('me', [icon('layers'), el('span', {}, 'Mis títulos'), el('b', {}, ownedBy(myId).length)]));
+  for (const p of players.filter(p => p.id !== myId)) {
+    tabs.push(tab(p.id, [el('span', { class: 'seg-dot' }), el('span', {}, p.username), el('b', {}, ownedBy(p.id).length)], { '--player-color': p.color }));
+  }
+  tabs.push(tab('all', [icon('users'), el('span', {}, 'Todos')]));
+  $('table-tabs').replaceChildren(...tabs);
 }
 
 function renderTableCards() {
+  renderTableTabs();
   const box = $('table-cards');
   const seen = new Set();
-  const seats = state.players.filter(p => !p.bankrupt || ownedBy(p.id).length).map(p => {
-    const rank = (s) => (s.type === 'property' ? 0 : s.type === 'transport' ? 100 : 200) + s.id;
-    const props = ownedBy(p.id).sort((a, b) => rank(a) - rank(b));
-    const cards = props.map(s => {
-      const key = `${s.id}:${p.id}`;
-      seen.add(key);
-      return deedCard(s, dealtCards !== null && !dealtCards.has(key));
-    });
-    return el('div', { class: `tseat ${p.id === myId ? 'is-me' : ''} ${state.turn && state.turn.playerId === p.id ? 'turn' : ''}`, '--player-color': p.color },
+  const flipped = new Set();
+  const players = state.players.filter(p => !p.bankrupt || ownedBy(p.id).length);
+  // Se recorren todos (aunque no se vean) para que las animaciones de
+  // "repartir" y "voltear" no se disparen al cambiar de pestaña.
+  const byPlayer = new Map(players.map(p => [p.id, renderSets(p.id, seen, flipped)]));
+  const ownerOf = tableView === 'me' ? myId : tableView;
+
+  let content;
+  if (tableView === 'all') {
+    box.dataset.view = 'all';
+    content = players.map(p => el('div', { class: `tseat ${p.id === myId ? 'is-me' : ''} ${state.turn && state.turn.playerId === p.id ? 'turn' : ''}`, '--player-color': p.color },
       el('div', { class: 'seat-head' },
         tokenOf(p.skin, 'sm', p.color),
-        el('strong', {}, p.username, p.id === myId ? ' (tú)' : ''),
+        el('strong', {}, p.username),
         el('span', { class: 'seat-money' }, money(p.money)),
-        el('span', { class: 'seat-count' }, `${props.length} título${props.length === 1 ? '' : 's'}`)),
-      el('div', { class: 'seat-cards' }, cards.length ? cards : el('div', { class: 'seat-empty' }, 'Sin títulos todavía')));
-  });
+        el('span', { class: 'seat-count' }, `${ownedBy(p.id).length} títulos`)),
+      el('div', { class: 'seat-sets' }, byPlayer.get(p.id))));
+  } else {
+    box.dataset.view = 'single';
+    content = byPlayer.get(ownerOf) || [el('div', { class: 'seat-empty' }, 'Sin títulos')];
+  }
+
+  // Resumen de la vista actual (en una línea, sin explicaciones)
+  const ids = tableView === 'all' ? players.map(p => p.id) : [ownerOf];
+  const all = ids.flatMap(id => ownedBy(id));
+  const mortgaged = all.filter(s => state.properties[s.id].mortgaged).length;
+  const complete = ids.reduce((n, id) => n + deedSets(id).filter(x => x.key[0] === 'g' && x.have === x.total).length, 0);
+  $('table-summary').replaceChildren(
+    el('span', {}, el('b', {}, all.length), ' títulos'),
+    complete ? el('span', { class: 'sum-ok' }, icon('check'), el('b', {}, complete), complete === 1 ? ' grupo completo' : ' grupos completos') : '',
+    mortgaged ? el('span', { class: 'sum-warn' }, icon('bank'), el('b', {}, mortgaged), mortgaged === 1 ? ' hipotecada' : ' hipotecadas') : '');
+
   dealtCards = seen;
-  box.replaceChildren(...seats);
+  flippedSeen = flipped;
+  box.replaceChildren(...content);
 }
 
+// Mostrar u ocultar la mesa
 $('table-toggle').addEventListener('click', () => {
-  const wrap = $('table-cards').parentElement;
+  const wrap = $('table-wrap');
   const hidden = wrap.classList.toggle('collapsed');
-  $('table-toggle').textContent = hidden ? 'Mostrar' : 'Ocultar';
+  $('table-toggle').title = hidden ? 'Mostrar la mesa' : 'Ocultar la mesa';
   $('table-toggle').setAttribute('aria-expanded', String(!hidden));
   requestAnimationFrame(() => BoardView.fit());
 });
+
+// Alto de la mesa: se arrastra el borde superior (se recuerda)
+(function tableResize() {
+  const wrap = $('table-wrap');
+  const handle = $('table-resize');
+  const MIN = 150;
+  const max = () => Math.max(MIN, Math.round(window.innerHeight * 0.6));
+  const setH = (h) => {
+    const v = Math.max(MIN, Math.min(max(), Math.round(h)));
+    wrap.style.setProperty('--table-h', `${v}px`);
+    return v;
+  };
+  try { const saved = Number(localStorage.getItem('table_h')); if (saved) setH(saved); } catch { /* sin storage */ }
+  let drag = null;
+  handle.addEventListener('pointerdown', (ev) => {
+    drag = { y: ev.clientY, h: wrap.getBoundingClientRect().height };
+    handle.setPointerCapture(ev.pointerId);
+    wrap.classList.add('resizing');
+  });
+  handle.addEventListener('pointermove', (ev) => {
+    if (!drag) return;
+    setH(drag.h + (drag.y - ev.clientY));
+    BoardView.resize();
+  });
+  const end = () => {
+    if (!drag) return;
+    drag = null;
+    wrap.classList.remove('resizing');
+    try { localStorage.setItem('table_h', String(Math.round(wrap.getBoundingClientRect().height))); } catch { /* sin storage */ }
+    BoardView.fit();
+  };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+  handle.addEventListener('dblclick', () => { wrap.style.removeProperty('--table-h'); try { localStorage.removeItem('table_h'); } catch { /* sin storage */ } BoardView.fit(); });
+})();
 
 // ── Panel: mis propiedades (construir, vender, hipotecar) ────────────────────
 function renderMyProps() {
@@ -872,25 +1057,22 @@ function renderMyProps() {
     if (s.type === 'property' && !prop.mortgaged) {
       const full = groupSpaces(s.group).every(g => state.properties[g.id].ownerId === myId);
       if (full && prop.level < 5 && !inDebt) {
-        btns.push(el('button', { class: 'btn btn-success', disabled: !myTurn, onclick: () => act('build', { spaceId: s.id }) },
-          `${prop.level === 4 ? 'Hotel' : 'Casa'} (−${money(s.houseCost)})`));
+        btns.push(ibtn(prop.level === 4 ? 'hotel' : 'home', `${prop.level === 4 ? 'Hotel' : 'Casa'} −${money(s.houseCost)}`, { class: 'btn btn-success', disabled: !myTurn, onclick: () => act('build', { spaceId: s.id }) }));
       }
       if (prop.level > 0) {
-        btns.push(el('button', { class: 'btn btn-secondary', disabled: !myTurn, onclick: () => act('sell_building', { spaceId: s.id }) },
-          `Vender (+${money(Math.floor(s.houseCost * e.buildingSellRate))})`));
+        btns.push(ibtn('hammer', `Vender +${money(Math.floor(s.houseCost * e.buildingSellRate))}`, { class: 'btn btn-secondary', disabled: !myTurn, onclick: () => act('sell_building', { spaceId: s.id }) }));
       }
     }
     if (!prop.mortgaged && !(s.type === 'property' && groupHasBuildings(s.group))) {
-      btns.push(el('button', { class: 'btn btn-secondary', disabled: !myTurn, onclick: () => act('mortgage', { spaceId: s.id }) },
-        `Hipotecar (+${money(Math.floor(s.price * e.mortgageRate))})`));
+      btns.push(ibtn('bank', `Hipotecar +${money(Math.floor(s.price * e.mortgageRate))}`, { class: 'btn btn-secondary', disabled: !myTurn, onclick: () => act('mortgage', { spaceId: s.id }) }));
     }
     if (prop.mortgaged && !inDebt) {
-      btns.push(el('button', { class: 'btn btn-secondary', disabled: !myTurn, onclick: () => act('unmortgage', { spaceId: s.id }) },
-        `Levantar (−${money(unmortgageCost(s))})`));
+      btns.push(ibtn('unlock', `Levantar −${money(unmortgageCost(s))}`, { class: 'btn btn-secondary', disabled: !myTurn, onclick: () => act('unmortgage', { spaceId: s.id }) }));
     }
-    const status = prop.mortgaged ? ' · hipotecada' : prop.level ? ` · ${prop.level === 5 ? 'hotel' : prop.level + ' casa(s)'}` : '';
-    return el('div', { class: 'prop-row', '--group-color': s.type === 'property' ? config.groups[s.group].color : '#64748b' },
-      el('div', { class: 'prop-name' }, s.name, el('span', { class: 'text-muted' }, status)),
+    const status = prop.mortgaged ? el('span', { class: 'prop-badge bad' }, 'Hipotecada')
+      : prop.level ? el('span', { class: 'prop-badge' }, prop.level === 5 ? 'Hotel' : `${prop.level} casa${prop.level > 1 ? 's' : ''}`) : '';
+    return el('div', { class: `prop-row ${prop.mortgaged ? 'is-mortgaged' : ''}`, '--group-color': s.type === 'property' ? config.groups[s.group].color : '#64748b' },
+      el('div', { class: 'prop-name' }, el('span', {}, clean(s.name)), status),
       btns.length ? el('div', { class: 'prop-actions' }, btns) : ''
     );
   }));
@@ -917,14 +1099,14 @@ let tradeWin = { open: false, mode: null, tradeId: null, dismissedTradeId: null,
 function propChip(spaceId) {
   const s = config.spaces[spaceId];
   const color = s.type === 'property' ? config.groups[s.group].color : '#64748b';
-  return el('span', { class: 'prop-chip', '--group-color': color }, s.icon ? `${s.icon} ` : '', s.name);
+  return el('span', { class: 'prop-chip', '--group-color': color }, clean(s.name));
 }
 
 function sideView(title, player, side) {
   const items = [];
   if (side.money) items.push(el('span', { class: 'money-chip' }, money(side.money)));
   for (const id of side.properties) items.push(propChip(id));
-  if (side.jailCards) items.push(el('span', { class: 'prop-chip' }, `🗝 ${side.jailCards} carta(s) de salida`));
+  if (side.jailCards) items.push(el('span', { class: 'prop-chip' }, icon('key'), `${side.jailCards} carta${side.jailCards > 1 ? 's' : ''} de salida`));
   return el('div', { class: 'trade-side', '--player-color': player.color },
     el('div', { class: 'trade-side-head' },
       tokenOf(player.skin, 'sm', player.color),
@@ -968,6 +1150,7 @@ function startCounter(t) {
 
 function buildTradeWindow() {
   const body = $('trade-win-body');
+  const foot = $('trade-win-foot');
   const title = $('trade-win-title');
   const t = state.trade;
 
@@ -978,28 +1161,28 @@ function buildTradeWindow() {
     title.textContent = t.toId === myId
       ? `${isCounter ? 'Contraoferta' : 'Oferta'} de ${from.username}`
       : `Tu ${isCounter ? 'contraoferta' : 'oferta'} a ${to.username}`;
-    const actions = el('div', { class: 'trade-actions' });
+    const actions = [];
     if (t.toId === myId) {
-      actions.append(
-        el('button', { class: 'btn btn-success', onclick: () => act('trade_respond', { tradeId: t.id, accept: true }) }, '✔ Aceptar'),
-        el('button', { class: 'btn btn-warning', onclick: () => startCounter(t), title: 'Proponer otros términos: puedes añadir o quitar propiedades y dinero' }, '↺ Contraoferta'),
-        el('button', { class: 'btn btn-danger', onclick: () => act('trade_respond', { tradeId: t.id, accept: false }) }, '✖ Rechazar')
+      actions.push(
+        ibtn('close', 'Rechazar', { class: 'btn btn-quiet', onclick: () => act('trade_respond', { tradeId: t.id, accept: false }) }),
+        ibtn('counter', 'Contraofertar', { class: 'btn btn-secondary', onclick: () => startCounter(t), title: 'Cambiar los términos y devolverla' }),
+        ibtn('check', 'Aceptar', { class: 'btn btn-success', onclick: () => act('trade_respond', { tradeId: t.id, accept: true }) })
       );
     } else if (t.fromId === myId) {
-      actions.append(
-        el('span', { class: 'text-muted small waiting-dots' }, `Esperando a ${to.username}`),
-        el('button', { class: 'btn btn-ghost btn-small', onclick: () => act('trade_cancel', { tradeId: t.id }) }, 'Cancelar oferta')
+      actions.push(
+        el('span', { class: 'foot-note waiting-dots' }, `Esperando a ${to.username}`),
+        ibtn('close', 'Cancelar oferta', { class: 'btn btn-quiet', onclick: () => act('trade_cancel', { tradeId: t.id }) })
       );
     }
     body.replaceChildren(
-      isCounter ? el('div', { class: 'trade-round' }, `↺ Contraoferta n.º ${t.round}`) : '',
+      isCounter ? el('div', { class: 'trade-round' }, icon('counter'), `Contraoferta ${t.round}`) : '',
       el('div', { class: 'trade-compare' },
         sideView('Entrega', from, t.offer),
-        el('div', { class: 'trade-arrows', 'aria-hidden': 'true' }, '⇄'),
+        el('div', { class: 'trade-arrows' }, icon('trade')),
         sideView('Entrega', to, t.request)
-      ),
-      actions
+      )
     );
+    foot.replaceChildren(...actions);
     return;
   }
 
@@ -1015,38 +1198,47 @@ function buildTradeWindow() {
     tradeDraft = { ...emptyDraft(), toId: others[0] ? others[0].id : '' };
   }
   const target = playerById(tradeDraft.toId);
-  if (!mine || !target) { body.replaceChildren(el('p', { class: 'text-muted' }, 'No hay con quién intercambiar.')); return; }
+  if (!mine || !target) { body.replaceChildren(el('p', { class: 'text-muted' }, 'No hay con quién intercambiar.')); foot.replaceChildren(); return; }
 
   const targets = counter
     ? el('div', { class: 'trade-targets' }, el('span', { class: 'trade-target', 'aria-pressed': 'true', '--player-color': target.color },
         tokenOf(target.skin, 'sm', target.color), el('span', {}, target.username), el('small', {}, money(target.money))))
-    : el('div', { class: 'trade-targets' }, others.map(p =>
+    : el('div', { class: 'trade-targets', role: 'radiogroup', 'aria-label': 'Con quién' }, others.map(p =>
       el('button', {
         type: 'button', class: 'trade-target', 'aria-pressed': String(p.id === tradeDraft.toId), '--player-color': p.color,
         onclick: () => { tradeDraft = { ...emptyDraft(), toId: p.id }; buildTradeWindow(); }
       }, tokenOf(p.skin, 'sm', p.color), el('span', {}, p.username), el('small', {}, money(p.money)))
     ));
 
+  const sendBtn = ibtn(counter ? 'counter' : 'send', counter ? 'Enviar contraoferta' : 'Enviar oferta', { class: 'btn btn-cta-sm' });
+  const isEmpty = () => [tradeDraft.offer, tradeDraft.request].every(s => !s.money && !s.properties.size && !s.jailCards);
+  const refreshSend = () => {
+    sendBtn.disabled = isEmpty();
+    sendBtn.title = sendBtn.disabled ? 'Añade algo a la oferta' : '';
+  };
+
   const column = (heading, owner, side) => {
     const props = ownedBy(owner.id).filter(isTradeable);
     return el('div', { class: 'trade-col', '--player-color': owner.color },
       el('div', { class: 'trade-col-title' }, heading),
-      el('label', { class: 'trade-money' }, 'Dinero',
-        el('input', { type: 'number', min: 0, max: owner.money, step: 10, value: side.money,
-          oninput: (ev) => { side.money = Math.max(0, Math.min(owner.money, Math.floor(Number(ev.target.value) || 0))); } })),
+      el('label', { class: 'trade-money' }, el('span', {}, 'Dinero ', el('small', {}, `máx. ${money(owner.money)}`)),
+        el('input', { type: 'number', min: 0, max: owner.money, step: 10, value: side.money, inputmode: 'numeric',
+          oninput: (ev) => { side.money = Math.max(0, Math.min(owner.money, Math.floor(Number(ev.target.value) || 0))); refreshSend(); } })),
       owner.jailCards ? el('label', { class: 'trade-money' }, 'Cartas de salida',
         el('input', { type: 'number', min: 0, max: owner.jailCards, value: side.jailCards,
-          oninput: (ev) => { side.jailCards = Math.max(0, Math.min(owner.jailCards, Math.floor(Number(ev.target.value) || 0))); } })) : '',
+          oninput: (ev) => { side.jailCards = Math.max(0, Math.min(owner.jailCards, Math.floor(Number(ev.target.value) || 0))); refreshSend(); } })) : '',
       el('div', { class: 'checks' }, props.length
         ? props.map(s => el('label', { class: 'check-prop', '--group-color': s.type === 'property' ? config.groups[s.group].color : '#64748b' },
             el('input', { type: 'checkbox', checked: side.properties.has(s.id),
-              onchange: (ev) => { if (ev.target.checked) side.properties.add(s.id); else side.properties.delete(s.id); } }),
-            el('span', {}, s.name)))
-        : el('span', { class: 'text-muted small' }, 'Sin propiedades intercambiables'))
+              onchange: (ev) => { if (ev.target.checked) side.properties.add(s.id); else side.properties.delete(s.id); refreshSend(); } }),
+            el('span', {}, clean(s.name)),
+            state.properties[s.id].mortgaged ? el('small', { class: 'check-mort' }, 'hipotecada') : ''))
+        : el('span', { class: 'text-muted small' }, 'Nada intercambiable'))
     );
   };
 
-  const send = () => {
+  sendBtn.addEventListener('click', () => {
+    if (isEmpty()) return;
     if (counter) {
       act('trade_counter', { tradeId: t.id, offer: sidePayload(tradeDraft.offer), request: sidePayload(tradeDraft.request) });
     } else {
@@ -1054,21 +1246,24 @@ function buildTradeWindow() {
     }
     tradeDraft = emptyDraft();
     tradeWin.mode = 'offer';   // se mostrará la oferta enviada cuando llegue el estado
-  };
+    sendBtn.disabled = true;
+  });
+  refreshSend();
 
   body.replaceChildren(
-    el('div', { class: 'trade-label' }, counter ? 'Contraoferta para' : 'Con quién'),
+    counter ? '' : el('div', { class: 'trade-label' }, 'Con quién'),
     targets,
-    counter ? el('p', { class: 'small text-muted' }, 'Ajusta los términos: añade o quita propiedades, dinero o cartas de ambos lados.') : '',
     el('div', { class: 'trade-cols' },
       column(counter ? 'Tú entregas' : 'Tú ofreces', mine, tradeDraft.offer),
-      column(`Pides a ${target.username}`, target, tradeDraft.request)),
-    el('div', { class: 'trade-actions' },
-      el('button', { class: 'btn', type: 'button', onclick: send }, counter ? '↺ Enviar contraoferta' : 'Enviar oferta'),
-      counter
-        ? el('button', { class: 'btn btn-ghost', type: 'button', onclick: () => { tradeDraft = emptyDraft(); tradeWin.mode = 'offer'; buildTradeWindow(); } }, '← Volver a la oferta')
-        : el('button', { class: 'btn btn-ghost', type: 'button', onclick: closeTradeWindow }, 'Cerrar')
-    )
+      column(`Pides a ${target.username}`, target, tradeDraft.request))
+  );
+  // Las acciones van en el pie fijo: siempre visibles aunque el formulario
+  // sea más alto que la ventana (antes quedaban fuera de la pantalla).
+  foot.replaceChildren(
+    counter
+      ? ibtn('back', 'Volver a la oferta', { class: 'btn btn-quiet', onclick: () => { tradeDraft = emptyDraft(); tradeWin.mode = 'offer'; buildTradeWindow(); } })
+      : ibtn('close', 'Cerrar', { class: 'btn btn-quiet', onclick: closeTradeWindow }),
+    sendBtn
   );
 }
 
@@ -1080,19 +1275,20 @@ function renderTradeButton() {
   const mine = me();
   btn.hidden = !mine || mine.bankrupt || state.phase !== 'playing';
   btn.classList.remove('has-offer');
+  const label = (text) => btn.replaceChildren(icon('trade'), el('span', {}, text));
   if (t) {
     const from = playerById(t.fromId), to = playerById(t.toId);
     const involved = t.fromId === myId || t.toId === myId;
     btn.disabled = !involved;
-    btn.textContent = t.toId === myId ? '⇄ ¡Tienes una oferta!' : involved ? '⇄ Ver mi oferta' : '⇄ Intercambio en curso';
+    label(t.toId === myId ? 'Tienes una oferta' : involved ? 'Ver mi oferta' : 'Intercambio en curso');
     if (t.toId === myId) btn.classList.add('has-offer');
-    hint.textContent = `${from.username} ⇄ ${to.username}${t.round ? ` · contraoferta ${t.round}` : ''}`;
+    hint.textContent = `${from.username} y ${to.username}${t.round ? ` · ronda ${t.round + 1}` : ''}`;
     btn.onclick = () => openTradeWindow('offer');
   } else {
     const ok = canPropose();
     btn.disabled = !ok;
-    btn.textContent = '⇄ Intercambiar';
-    hint.textContent = ok ? '' : (state.phase === 'playing' ? 'Disponible en tu turno' : '');
+    label('Intercambiar');
+    hint.textContent = ok ? '' : (state.phase === 'playing' ? 'En tu turno' : '');
     btn.onclick = () => openTradeWindow('propose');
   }
 }
@@ -1158,35 +1354,36 @@ const LOG_SOUNDS = [
   [/ va al calabozo| dobles seguidos/, 'jail'],
   [/ aceptó el intercambio /, 'tradeOk'],
   [/ propone un intercambio a /, 'trade'],
-  [/^⏰ Se acabó el tiempo de /, 'timeout'],
+  [/^Se acabó el tiempo de /, 'timeout'],
   [/ no se reconectó a tiempo| quebró| quedó eliminado| se rinde/, 'expel']
 ];
 
 // Avisos grandes sobre el tablero. Cada regla: [regex, tipo, icono, (match) → texto]
 const EVENT_RULES = [
-  [/^(.+) debe pagar (\d+) de renta a (.+)$/, 'rent', '💸', m => [`${m[1]} paga renta a ${m[3]}`, money(m[2])]],
-  [/^(.+) compró (.+) por (\d+)$/, 'buy', '🏠', m => [`${m[1]} compró ${m[2]}`, money(m[3])]],
-  [/^(.+) construyó en (.+) \((.+)\)$/, 'build', '🏗', m => [`${m[1]} construyó en ${m[2]}`, m[3]]],
-  [/^(.+) pasa por Salida y cobra (\d+)$/, 'collect', '⚑', m => [`${m[1]} pasa por Salida`, `+${money(m[2])}`]],
-  [/^(.+) se lleva el Fondo de Donaciones: (\d+)$/, 'collect', '💰', m => [`${m[1]} se lleva el Fondo`, `+${money(m[2])}`]],
-  [/^(.+) toma Tarjeta (General|Especial): (.+)$/, 'card', '📜', m => [`${m[1]} · Tarjeta ${m[2]}`, m[3]]],
-  [/^(.+) va al calabozo$/, 'jail', '⛓', m => [`${m[1]} va al calabozo`, '']],
-  [/^(.+) no tiene suficiente dinero: debe (\d+)/, 'debt', '⚠', m => [`${m[1]} no puede pagar`, `Debe ${money(m[2])}`]],
-  [/^(.+) pagó su deuda de (\d+)$/, 'pay', '✔', m => [`${m[1]} pagó su deuda`, money(m[2])]],
-  [/^(.+) hipotecó (.+) por (\d+)$/, 'mortgage', '🏦', m => [`${m[1]} hipotecó ${m[2]}`, `+${money(m[3])}`]],
-  [/^(.+) aceptó el intercambio con (.+)$/, 'trade', '🤝', m => [`${m[1]} y ${m[2]} cerraron un intercambio`, '']],
-  [/^(.+) hace una contraoferta a (.+)$/, 'trade', '↺', m => [`${m[1]} contraoferta a ${m[2]}`, '']],
-  [/^(.+) propone un intercambio a (.+)$/, 'trade', '⇄', m => [`${m[1]} propone un intercambio a ${m[2]}`, '']],
-  [/^(.+) rechazó el intercambio$/, 'reject', '✖', m => [`${m[1]} rechazó el intercambio`, '']],
-  [/^(.+) quebró: sus bienes pasan a (.+)$/, 'out', '💀', m => [`${m[1]} quebró`, `Sus bienes pasan a ${m[2]}`]],
-  [/^(.+) quedó eliminado/, 'out', '💀', m => [`${m[1]} quedó eliminado`, '']],
-  [/^(.+) se rinde$/, 'out', '🏳', m => [`${m[1]} se rinde`, '']]
+  [/^(.+) debe pagar (\d+) de renta a (.+)$/, 'rent', 'cash', m => [`${m[1]} paga renta a ${m[3]}`, money(m[2])]],
+  [/^(.+) compró (.+) por (\d+)$/, 'buy', 'home', m => [`${m[1]} compró ${m[2]}`, money(m[3])]],
+  [/^(.+) construyó en (.+) \((.+)\)$/, 'build', 'hammer', m => [`${m[1]} construyó en ${m[2]}`, m[3]]],
+  [/^(.+) pasa por Salida y cobra (\d+)$/, 'collect', 'flag', m => [`${m[1]} pasa por Salida`, `+${money(m[2])}`]],
+  [/^(.+) se lleva el Fondo de Donaciones: (\d+)$/, 'collect', 'coins', m => [`${m[1]} se lleva el Fondo`, `+${money(m[2])}`]],
+  [/^(.+) toma Tarjeta (General|Especial): (.+)$/, 'card', 'card', m => [`${m[1]} · Tarjeta ${m[2]}`, m[3]]],
+  [/^(.+) va al calabozo$/, 'jail', 'bars', m => [`${m[1]} va al calabozo`, '']],
+  [/^(.+) no tiene suficiente dinero: debe (\d+)/, 'debt', 'alert', m => [`${m[1]} no puede pagar`, `Debe ${money(m[2])}`]],
+  [/^(.+) pagó su deuda de (\d+)$/, 'pay', 'check', m => [`${m[1]} pagó su deuda`, money(m[2])]],
+  [/^(.+) hipotecó (.+) por (\d+)$/, 'mortgage', 'bank', m => [`${m[1]} hipotecó ${m[2]}`, `+${money(m[3])}`]],
+  [/^(.+) aceptó el intercambio con (.+)$/, 'trade', 'deal', m => [`${m[1]} y ${m[2]} cerraron un intercambio`, '']],
+  [/^(.+) hace una contraoferta a (.+)$/, 'trade', 'counter', m => [`${m[1]} contraoferta a ${m[2]}`, '']],
+  [/^(.+) propone un intercambio a (.+)$/, 'trade', 'trade', m => [`${m[1]} propone un intercambio a ${m[2]}`, '']],
+  [/^(.+) rechazó el intercambio$/, 'reject', 'close', m => [`${m[1]} rechazó el intercambio`, '']],
+  [/^(.+) quebró: sus bienes pasan a (.+)$/, 'out', 'out', m => [`${m[1]} quebró`, `Sus bienes pasan a ${m[2]}`]],
+  [/^(.+) quedó eliminado/, 'out', 'out', m => [`${m[1]} quedó eliminado`, '']],
+  [/^(.+) se rinde$/, 'out', 'flag', m => [`${m[1]} se rinde`, '']]
 ];
 
 function eventFor(text) {
-  for (const [re, kind, icon, fmt] of EVENT_RULES) {
+  text = clean(text);
+  for (const [re, kind, iconName, fmt] of EVENT_RULES) {
     const m = re.exec(text);
-    if (m) { const [title, detail] = fmt(m); return { kind, icon, title, detail }; }
+    if (m) { const [title, detail] = fmt(m); return { kind, icon: iconName, title, detail }; }
   }
   return null;
 }
@@ -1195,12 +1392,12 @@ function showEvent(ev, player) {
   const feed = $('event-feed');
   const mine = player && player.id === myId;
   const node = el('div', { class: `event-card ev-${ev.kind} ${mine ? 'is-mine' : ''}`, '--player-color': player ? player.color : 'var(--gold)' },
-    el('span', { class: 'event-icon', 'aria-hidden': 'true' }, ev.icon),
+    el('span', { class: 'event-icon' }, icon(ev.icon)),
     el('div', { class: 'event-text' },
       el('div', { class: 'event-title' }, ev.title),
       ev.detail ? el('div', { class: 'event-detail' }, ev.detail) : ''));
   feed.prepend(node);
-  while (feed.children.length > 3) feed.lastChild.remove();
+  while (feed.children.length > 2) feed.lastChild.remove();
   setTimeout(() => { node.classList.add('leaving'); setTimeout(() => node.remove(), 450); }, ev.kind === 'rent' || ev.kind === 'debt' ? 5500 : 4200);
 }
 
@@ -1218,7 +1415,7 @@ function processEvents() {
   seenLog = new Set(keys);
 
   for (const entry of fresh) {
-    const text = entry.text;
+    const text = clean(entry.text);
     // Aviso visible (cuando la ficha termina de caminar, si se está moviendo)
     const ev = eventFor(text);
     if (ev) {
@@ -1300,24 +1497,94 @@ function updateTimers() {
 }
 setInterval(updateTimers, 250);
 
-// ── Logros: aviso cuando se desbloquea una ficha nueva ───────────────────────
+// ── Logros: aviso cuando se desbloquea una ficha o un dado ───────────────────
+// Durante la partida el progreso guardado se suma a las estadísticas de la
+// partida en curso (las manda el coordinador en cada estado). Así el logro se
+// avisa en el momento en que se consigue, no al final. El auth-service lo
+// guarda cuando la partida termina.
 function achievementKey() { return `unlocked_skins:${currentUsername}`; }
+let lastStatsSig = null;
+let matchAch = [];   // logros conseguidos en esta partida: [{ item, t }]
+
+function matchKey() {
+  const start = state && state.log.find(l => l.text.startsWith('¡Comienza la partida!'));
+  return `match_ach:${ROOM_ID}:${start ? start.t : ''}`;
+}
+
+function liveProgress() {
+  const mine = state && state.phase === 'playing' ? me() : null;
+  if (!progress || !mine || !mine.stats) return progress;
+  const scope = (progress.prefs && progress.prefs.unlockTheme) || mine.themeId;
+  const themes = { ...(progress.themes || {}) };
+  const add = { ...(themes[scope] || {}) };
+  for (const [k, v] of Object.entries(mine.stats)) add[k] = (Number(add[k]) || 0) + (Number(v) || 0);
+  themes[scope] = add;
+  return { ...progress, themes };
+}
 
 function checkAchievements() {
   if (!config || !progress) return;
+  const prog = liveProgress();
+  const live = prog !== progress;
   const skins = config.themes.flatMap(t => t.skins.map(sk => ({ ...sk, themeId: t.id, themeName: t.name })));
   const dice = config.themes.flatMap(t => (t.dice || []).map(d => ({ ...d, themeId: t.id, themeName: t.name, isDice: true })));
-  const unlocked = skins.filter(sk => !sk.starter && sk.unlock && isUnlocked(sk))
-    .concat(dice.filter(d => isDiceUnlocked(d.id)));
+  const unlocked = skins.filter(sk => !sk.starter && sk.unlock && isUnlocked(sk, prog))
+    .concat(dice.filter(d => isDiceUnlocked(d.id, prog)));
   let known = null;
   try { known = JSON.parse(localStorage.getItem(achievementKey()) || 'null'); } catch { known = null; }
   const ids = unlocked.map(sk => sk.id);
-  try { localStorage.setItem(achievementKey(), JSON.stringify(ids)); } catch { /* sin storage */ }
+  // Lo ya conocido se conserva: el progreso en vivo puede ir por delante del guardado
+  const merged = Array.isArray(known) ? [...new Set([...known, ...ids])] : ids;
+  try { localStorage.setItem(achievementKey(), JSON.stringify(live ? merged : ids)); } catch { /* sin storage */ }
   if (!Array.isArray(known)) return; // primera vez en este navegador: solo se guarda
-  unlocked.filter(sk => !known.includes(sk.id)).forEach((sk, k) => setTimeout(() => showAchievement(sk), k * 1600));
+  const fresh = unlocked.filter(sk => !known.includes(sk.id));
+  fresh.forEach((sk, k) => setTimeout(() => showAchievement(sk, live), k * 1600));
+  if (live && fresh.length) {
+    matchAch.push(...fresh.map(item => ({ item, t: Date.now() })));
+    try { sessionStorage.setItem(matchKey(), JSON.stringify(matchAch.map(a => ({ id: a.item.id, t: a.t })))); } catch { /* sin storage */ }
+    renderMatchAchievements();
+  }
 }
 
-function showAchievement(skin) {
+// Se llama con cada estado: solo recalcula si cambiaron mis estadísticas
+function checkLiveAchievements() {
+  const mine = state && state.phase === 'playing' ? me() : null;
+  if (!mine || !mine.stats || !progress) return;
+  const sig = JSON.stringify(mine.stats);
+  if (sig === lastStatsSig) return;
+  const first = lastStatsSig === null;
+  lastStatsSig = sig;
+  if (first) restoreMatchAchievements();
+  checkAchievements();
+}
+
+function restoreMatchAchievements() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(matchKey()) || '[]');
+    const all = config.themes.flatMap(t => [...t.skins.map(sk => ({ ...sk, themeId: t.id, themeName: t.name })),
+      ...(t.dice || []).map(d => ({ ...d, themeId: t.id, themeName: t.name, isDice: true }))]);
+    matchAch = saved.map(a => ({ item: all.find(x => x.id === a.id), t: a.t })).filter(a => a.item);
+  } catch { matchAch = []; }
+  renderMatchAchievements();
+}
+
+function renderMatchAchievements() {
+  const panel = $('match-ach-panel');
+  panel.hidden = !matchAch.length;
+  if (!matchAch.length) return;
+  const RARITY_COLOR = { common: '#cbd5e1', rare: '#5b9bd5', epic: '#a78bfa', legendary: '#f2c14e' };
+  $('match-ach').replaceChildren(...matchAch.map(({ item }) => {
+    const color = RARITY_COLOR[item.rarity] || '#f2c14e';
+    return el('li', { '--rarity-color': color },
+      item.isDice ? Collection.dieNode(item.style, 6, 'die-xs') : tokenOf(item, 'sm', color),
+      el('div', { class: 'ma-text' },
+        el('strong', {}, clean(item.name)),
+        el('span', {}, [item.isDice ? 'Dado' : 'Ficha', item.themeName].filter(Boolean).join(' · '))),
+      el('span', { class: 'ma-state', title: 'Se guarda en tu cuenta al terminar la partida' }, icon('clock')));
+  }));
+}
+
+function showAchievement(skin, live = false) {
   const rarity = (config.rarities && config.rarities[skin.rarity]) || null;
   const RARITY_COLOR = { common: '#cbd5e1', rare: '#5b9bd5', epic: '#a78bfa', legendary: '#f2c14e' };
   const color = RARITY_COLOR[skin.rarity] || '#f2c14e';
@@ -1325,13 +1592,13 @@ function showAchievement(skin) {
     el('div', { class: 'achievement-glow', 'aria-hidden': 'true' }),
     skin.isDice ? Collection.dieNode(skin.style, 6, 'die-ach') : tokenOf(skin, 'lg', color),
     el('div', { class: 'achievement-text' },
-      el('div', { class: 'achievement-kicker' }, skin.isDice ? '🎲 ¡Dado desbloqueado!' : '🏅 ¡Logro desbloqueado!'),
-      el('div', { class: 'achievement-title' }, skin.name),
+      el('div', { class: 'achievement-kicker' }, icon(skin.isDice ? 'dice' : 'medal'), skin.isDice ? 'Dado desbloqueado' : 'Logro desbloqueado'),
+      el('div', { class: 'achievement-title' }, clean(skin.name)),
       el('div', { class: 'achievement-sub' },
         [rarity ? rarity.label : skin.rarity, skin.themeName].filter(Boolean).join(' · ')),
-      skin.unlock && skin.unlock.text ? el('div', { class: 'achievement-sub' }, skin.unlock.text) : ''
+      live ? el('div', { class: 'achievement-sub' }, 'Se guarda al terminar la partida') : ''
     ),
-    el('button', { class: 'achievement-close', type: 'button', 'aria-label': 'Cerrar', onclick: () => dismiss() }, '✕')
+    el('button', { class: 'achievement-close', type: 'button', 'aria-label': 'Cerrar', onclick: () => dismiss() }, icon('close'))
   );
   const dismiss = () => { card.classList.add('leaving'); setTimeout(() => card.remove(), 400); };
   $('achievements').append(card);
@@ -1369,7 +1636,7 @@ function renderEndModal() {
   const ranking = [...state.players].sort((x, y) =>
     (y.id === state.winnerId) - (x.id === state.winnerId) || (x.bankrupt - y.bankrupt) || (y.money - x.money));
   $('end-ranking').replaceChildren(...ranking.map((p, i) => el('li', { class: p.id === state.winnerId ? 'is-winner' : '', '--player-color': p.color },
-    el('span', { class: 'rank' }, i === 0 && p.id === state.winnerId ? '🏆' : `${i + 1}.`),
+    el('span', { class: 'rank' }, i === 0 && p.id === state.winnerId ? icon('trophy') : `${i + 1}`),
     tokenOf(p.skin, 'sm', p.color),
     el('span', { class: 'rname' }, p.username, p.id === myId ? ' (tú)' : ''),
     el('span', { class: 'rmeta' }, p.bankrupt ? 'eliminado' : money(p.money))
@@ -1395,7 +1662,7 @@ function renderEndModal() {
 function syncSoundBtn() {
   const b = $('sound-btn');
   const on = !Sound.isMuted();
-  b.textContent = on ? '🔊' : '🔇';
+  b.replaceChildren(icon(on ? 'sound' : 'mute'));
   b.setAttribute('aria-pressed', String(on));
   b.title = on ? 'Silenciar sonidos' : 'Activar sonidos';
 }
@@ -1406,13 +1673,49 @@ syncSoundBtn();
 function renderLog() {
   $('log').replaceChildren(...state.log.map(l => {
     const ev = eventFor(l.text);
-    return el('li', { class: ev ? `log-${ev.kind}` : '' }, ev ? `${ev.icon} ` : '', l.text);
+    return el('li', { class: ev ? `log-${ev.kind}` : '' }, ev ? icon(ev.icon) : el('span', { class: 'log-dot' }), el('span', {}, clean(l.text)));
   }));
 }
 
 // ── Chat de la partida ───────────────────────────────────────────────────────
-let chatSeen = null;      // id del último mensaje visto con el chat abierto
-let chatRendered = 0;
+let chatSeen = null;      // marca (t) del último mensaje visto con el chat abierto
+let chatRendered = '';
+
+// El chat se conserva al cambiar de coordinador: el cliente guarda una copia
+// local por sala y la une con la que llega del servidor (sin duplicados).
+// Si el coordinador nuevo trae menos mensajes (p. ej. uno que no alcanzó a
+// replicarse), no se pierde nada en pantalla. Los mensajes escritos sin
+// conexión quedan en cola y se envían al reconectar.
+const CHAT_KEY = `chat_cache:${ROOM_ID}`;
+const chatKeyOf = (m) => `${m.t}|${m.userId}|${m.text}`;
+let chatCache = [];
+let chatOutbox = [];
+try { chatCache = JSON.parse(sessionStorage.getItem(CHAT_KEY) || '[]'); } catch { chatCache = []; }
+try { chatOutbox = JSON.parse(sessionStorage.getItem(`${CHAT_KEY}:out`) || '[]'); } catch { chatOutbox = []; }
+
+function mergeChat(serverMsgs) {
+  const byKey = new Map(chatCache.map(m => [chatKeyOf(m), m]));
+  for (const m of serverMsgs || []) byKey.set(chatKeyOf(m), m);
+  chatCache = [...byKey.values()].sort((a, b) => a.t - b.t || (a.id || 0) - (b.id || 0)).slice(-120);
+  try { sessionStorage.setItem(CHAT_KEY, JSON.stringify(chatCache)); } catch { /* sin storage */ }
+  return chatCache;
+}
+
+function flushChatOutbox() {
+  if (!chatOutbox.length || !conn || !conn.isOpen()) return;
+  const pending = chatOutbox;
+  chatOutbox = [];
+  pending.forEach((text, i) => setTimeout(() => sendChat(text), i * 1600));
+  saveOutbox();
+}
+function saveOutbox() { try { sessionStorage.setItem(`${CHAT_KEY}:out`, JSON.stringify(chatOutbox)); } catch { /* sin storage */ } }
+
+function sendChat(text) {
+  if (conn && conn.send({ type: 'game_action', data: { action: 'chat', text } })) return;
+  chatOutbox.push(text);
+  saveOutbox();
+  renderChat(true);
+}
 
 function chatOpen() { return $('chat').dataset.open === 'true'; }
 
@@ -1424,24 +1727,31 @@ function setChatOpen(open) {
 }
 
 function renderChat(force = false) {
-  const msgs = (state && state.chat) || [];
-  const last = msgs.length ? msgs[msgs.length - 1].id : 0;
+  const msgs = mergeChat(state && state.chat);
+  const last = msgs.length ? msgs[msgs.length - 1].t : 0;
   if (chatSeen === null) chatSeen = last;                   // al entrar no cuenta lo viejo
   if (chatOpen()) chatSeen = last;
-  const unread = msgs.filter(m => m.id > chatSeen && m.userId !== myId).length;
+  const unread = msgs.filter(m => m.t > chatSeen && m.userId !== myId).length;
   $('chat-unread').hidden = unread === 0;
   $('chat-unread').textContent = unread > 9 ? '9+' : String(unread);
-  if (!force && last === chatRendered) return;
-  chatRendered = last;
+  const sig = `${msgs.length}|${last}|${chatOutbox.length}`;
+  if (!force && sig === chatRendered) return;
+  chatRendered = sig;
 
   const list = $('chat-list');
   const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
-  list.replaceChildren(...(msgs.length ? msgs.map(m => {
+  const items = msgs.map(m => {
     const time = new Date(m.t).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
     return el('li', { class: `chat-msg ${m.userId === myId ? 'mine' : ''}`, '--player-color': m.color || 'var(--text-muted)' },
       el('div', { class: 'chat-meta' }, el('strong', {}, m.username), m.spectator ? ' · espectador' : '', ` · ${time}`),
       el('div', { class: 'chat-text' }, m.text));
-  }) : [el('li', { class: 'chat-empty text-muted small' }, 'Nadie ha escrito todavía. ¡Saluda!')]));
+  });
+  for (const text of chatOutbox) {
+    items.push(el('li', { class: 'chat-msg mine pending', title: 'Se enviará al reconectar' },
+      el('div', { class: 'chat-meta' }, icon('clock'), ' pendiente'),
+      el('div', { class: 'chat-text' }, text)));
+  }
+  list.replaceChildren(...(items.length ? items : [el('li', { class: 'chat-empty' }, 'Sin mensajes')]));
   if (atBottom || force) list.scrollTop = list.scrollHeight;
 }
 
@@ -1451,9 +1761,10 @@ $('chat-form').addEventListener('submit', (ev) => {
   const input = $('chat-input');
   const text = input.value.trim();
   if (!text) return;
-  act('chat', { text });
+  sendChat(text);
   input.value = '';
 });
+
 try { if (localStorage.getItem('chat_open') === '1') setChatOpen(true); } catch { /* sin storage */ }
 
 // ── Sala de espera ───────────────────────────────────────────────────────────
@@ -1468,7 +1779,7 @@ function renderWaitingRoom() {
   $('theme-grid').replaceChildren(...config.themes.map(t => {
     const m = memberById(t.memberId);
     const color = WORLD_COLOR[t.memberId] || m.color;
-    const free = t.skins.filter(isUnlocked).length;
+    const free = t.skins.filter(s => isUnlocked(s)).length;
     const freeDice = t.dice.filter(d => isDiceUnlocked(d.id)).length;
     const unlocking = progress && progress.prefs && progress.prefs.unlockTheme === t.id;
     return el('button', {
@@ -1482,7 +1793,7 @@ function renderWaitingRoom() {
         render();
       }
     },
-      el('span', { class: 'theme-member' }, `${m.world} · ${m.name}`, unlocking ? ' · 🔓 liberando' : ''),
+      el('span', { class: 'theme-member' }, `${m.world} · ${m.name}`, unlocking ? el('span', { class: 'unlocking' }, icon('unlock'), 'liberando') : ''),
       el('strong', {}, t.name),
       el('span', { class: 'small text-muted' }, t.description),
       el('span', { class: 'theme-tokens' }, t.skins.map(s => {
@@ -1512,7 +1823,7 @@ function renderWaitingRoom() {
       onclick: () => { selectedSkin = s.id; render(); }
     },
       node,
-      el('span', { class: 'sname' }, s.name, ok ? '' : ' 🔒'),
+      el('span', { class: 'sname' }, ok ? '' : icon('lock'), clean(s.name)),
       el('span', { class: 'smission' }, s.starter ? 'Ficha inicial'
         : ok ? 'Desbloqueada'
         : st === 'next' ? `${s.unlock.text} (${have}/${s.unlock.count})`
@@ -1554,7 +1865,7 @@ function renderWaitingRoom() {
         'aria-pressed': String(selectedDice === d.id),
         title: ok ? d.name : (st === 'next' ? `${d.unlock.text} (${have}/${d.unlock.count})` : `Libera antes "${g.theme.dice[i - 1].name}"`),
         onclick: () => { selectedDice = d.id; render(); }
-      }, face, el('span', { class: 'dice-name' }, d.name, ok ? '' : ' 🔒'),
+      }, face, el('span', { class: 'dice-name' }, ok ? '' : icon('lock'), clean(d.name)),
         !ok ? el('span', { class: 'smission' }, st === 'next' ? `${d.unlock.text} (${have}/${d.unlock.count})` : 'Bloqueado') : '');
     }))
   )));
@@ -1580,10 +1891,10 @@ function renderWaitingRoom() {
         tokenOf(p.skin, '', p.color),
         p.dice ? Collection.dieNode(p.dice.style, 6, 'die-xs') : '',
         el('strong', {}, p.username), p.id === myId ? ' (tú)' : '',
-        el('span', { class: 'text-muted small' }, ` · ${p.skin.name} · ${theme ? theme.name : ''}${p.dice ? ` · ${p.dice.name}` : ''}`, p.id === state.hostId ? ' · anfitrión 👑' : '')
+        el('span', { class: 'text-muted small' }, ` · ${p.skin.name} · ${theme ? theme.name : ''}${p.dice ? ` · ${p.dice.name}` : ''}`, ''), p.id === state.hostId ? el('span', { class: 'host', title: 'Anfitrión' }, icon('crown')) : ''
       );
     })
-    : [el('li', { class: 'text-muted' }, 'Nadie se ha unido todavía. ¡Sé el primero!')]));
+    : [el('li', { class: 'text-muted' }, 'Aún no hay jugadores')]));
 }
 
 // Preselección con lo guardado (auth-service o copia local): temática, ficha,
@@ -1640,6 +1951,7 @@ function render() {
   renderTrade();
   renderLog();
   processEvents();
+  checkLiveAchievements();
   updateTimers();
   renderEndModal();
 }
@@ -1665,7 +1977,6 @@ function onMessage(msg) {
   switch (msg.type) {
     case 'welcome':
       myId = String(msg.you.userId);
-      if (msg.coordinator) $('coord-id').textContent = msg.coordinator.coordinatorId;
       break;
     case 'game_config':
       config = msg.data;
@@ -1694,7 +2005,9 @@ function onMessage(msg) {
       render();
       break;
     case 'game_error':
-      toast(msg.data.message);
+      toast(clean(msg.data.message));
+      // Si el error era de un intercambio, la ventana vuelve a su estado real
+      if (tradeWin.open && state) buildTradeWindow();
       break;
     case 'progress_changed':
       loadProgress();
@@ -1711,11 +2024,11 @@ function connect() {
     params: { view: 'board', room: ROOM_ID },
     prefer: ROOM_HOST,
     onStatus(stateName, text, info) {
-      setConn(stateName, stateName === 'connected' && info ? `Conectado a ${info.coordinatorId}` : text);
-      if (info) $('coord-id').textContent = stateName === 'connected' ? info.coordinatorId : '—';
+      setConn(stateName, stateName === 'connected' && info ? info.coordinatorId : text);
     },
     onOpen() {
       $('lost-banner').hidden = true;
+      setTimeout(flushChatOutbox, 800);
     },
     onRedirect(from, to) {
       // La sala vive en otro coordinador: nos cambiamos a él automáticamente.
@@ -1765,3 +2078,9 @@ if (!originalToken) {
 // Para la demo de autoridad: `state` es local. Modificarlo desde DevTools solo
 // cambia esta pantalla; el próximo game_state del servidor lo sobrescribe.
 window.getGameState = () => state;
+
+// El indicador del auth (lib/auth.js) va en el encabezado para no tapar la mesa
+document.addEventListener('DOMContentLoaded', () => setTimeout(() => {
+  const b = document.getElementById('auth-badge');
+  if (b) document.querySelector('.game-header-left').append(b);
+}, 0));

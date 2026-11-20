@@ -21,14 +21,14 @@ let leaving = false;
 const STATUS_LABEL = { vacia: 'Vacía', sin_iniciar: 'Sin iniciar', en_curso: 'En curso', finalizada: 'Finalizada' };
 // Emblemas disponibles al crear una sala (el coordinador valida la lista)
 const ROOM_STYLE = {
-  galaxia:   { emoji: '🌌', label: 'Galaxia',   color: 'var(--galaxy)' },
-  nave:      { emoji: '🚀', label: 'Nave',      color: 'var(--galaxy)' },
-  yggdrasil: { emoji: '🌳', label: 'Yggdrasil', color: 'var(--fantasy)' },
-  dragon:    { emoji: '🐉', label: 'Dragón',    color: 'var(--fantasy)' },
-  drakkar:   { emoji: '⛵', label: 'Drakkar',   color: 'var(--viking)' },
-  martillo:  { emoji: '🔨', label: 'Mjölnir',   color: 'var(--viking)' },
-  babel:     { emoji: '📚', label: 'Babel',     color: 'var(--letters)' },
-  pluma:     { emoji: '🪶', label: 'Pluma',     color: 'var(--letters)' }
+  galaxia:   { icon: 'planet',  label: 'Galaxia',   color: 'var(--galaxy)' },
+  nave:      { icon: 'rocket',  label: 'Nave',      color: 'var(--galaxy)' },
+  yggdrasil: { icon: 'tree',    label: 'Yggdrasil', color: 'var(--fantasy)' },
+  dragon:    { icon: 'dragon',  label: 'Dragón',    color: 'var(--fantasy)' },
+  drakkar:   { icon: 'ship',    label: 'Drakkar',   color: 'var(--viking)' },
+  martillo:  { icon: 'hammer',  label: 'Mjölnir',   color: 'var(--viking)' },
+  babel:     { icon: 'book',    label: 'Babel',     color: 'var(--letters)' },
+  pluma:     { icon: 'feather', label: 'Pluma',     color: 'var(--letters)' }
 };
 const WORLD_COLOR = { david: 'var(--galaxy)', jossef: 'var(--fantasy)', sebastian: 'var(--viking)', santiago: 'var(--letters)' };
 
@@ -73,7 +73,7 @@ function renderRooms() {
   }
 
   box.replaceChildren(...rooms.map(r => {
-    const style = ROOM_STYLE[r.emblem] || { emoji: '🎲', color: 'var(--gold)' };
+    const style = ROOM_STYLE[r.emblem] || { icon: 'dice', color: 'var(--gold)' };
     const amIn = r.players.some(p => p.id === myId);
 
     const seats = el('div', { class: 'seats', 'aria-label': `${r.players.length} de ${r.maxPlayers} asientos ocupados` });
@@ -94,7 +94,7 @@ function renderRooms() {
     for (const p of r.players) {
       list.append(el('li', { class: p.connected ? '' : 'offline' },
         Tokens.node(p.skin, 'sm', p.color),
-        el('span', { class: 'pn' }, p.username, p.id === myId ? ' (tú)' : '', p.id === r.hostId ? ' 👑' : '', p.bankrupt ? ' · eliminado' : ''),
+        el('span', { class: 'pn' }, p.username, p.id === myId ? ' (tú)' : '', p.id === r.hostId ? Icons.svg('crown', 'host-ic') : '', p.bankrupt ? ' · eliminado' : ''),
         p.connected && p.coordinatorId ? coordTag(p.coordinatorId) : el('span', { class: 'small text-muted' }, p.connected ? 'en la sala' : 'desconectado')
       ));
     }
@@ -122,7 +122,7 @@ function renderRooms() {
 
     return el('article', { class: 'room-card', '--rc': style.color, 'data-status': r.status },
       el('header', { class: 'room-head' },
-        el('span', { class: 'room-emblem', 'aria-hidden': 'true' }, style.emoji),
+        el('span', { class: 'room-emblem', 'aria-hidden': 'true' }, Icons.svg(style.icon)),
         el('div', { class: 'room-title' }, el('h3', {}, r.name), el('span', { class: 'room-id' }, r.id)),
         el('span', { class: `status-pill ${r.status}` }, STATUS_LABEL[r.status] || r.status)
       ),
@@ -150,7 +150,7 @@ function showCreateError(text) {
 
 function renderEmblemPicker() {
   $('room-emblem-input').replaceChildren(...Object.entries(ROOM_STYLE).map(([id, st]) =>
-    el('option', { value: id }, `${st.emoji} ${st.label}`)));
+    el('option', { value: id }, st.label)));
 }
 
 $('create-room-form').addEventListener('submit', (e) => {
@@ -188,7 +188,7 @@ function renderPlayersList() {
         ex ? Tokens.node({ art: ex.art }, 'sm', ex.color) : el('span', { class: 'status-dot' }),
         el('strong', {}, p.username),
         isMe ? el('span', { class: 'badge' }, 'Tú') : '',
-        el('span', { title: p.provider === 'google' ? 'Cuenta Google' : 'Cuenta local' }, p.provider === 'google' ? '🌐' : '')
+        el('span', { title: p.provider === 'google' ? 'Cuenta Google' : 'Cuenta local' }, p.provider === 'google' ? Icons.svg('globe') : '')
       ),
       el('div', { class: 'right' },
         coordTag(p.coordinatorId),
@@ -208,7 +208,7 @@ function missionLine(theme, list, i) {
   if (item.starter || !item.unlock) return { st: 'unlocked', text: 'Inicial · disponible', have, total: 0 };
   if (st === 'unlocked') return { st, text: `Liberado · ${item.unlock.text}`, have, total: item.unlock.count };
   if (st === 'next') return { st, text: `Misión: ${item.unlock.text} (${have}/${item.unlock.count})`, have, total: item.unlock.count };
-  return { st, text: `🔒 Libera antes "${list[i - 1].name}" · luego: ${item.unlock.text}`, have, total: item.unlock.count };
+  return { st, text: `Libera antes "${list[i - 1].name}" · luego: ${item.unlock.text}`, have, total: item.unlock.count };
 }
 
 function setUnlockTheme(themeId) {
@@ -235,8 +235,8 @@ function renderCollection() {
   const active = prefs().unlockTheme;
   const activeTheme = gameConfig.themes.find(t => t.id === active);
   $('unlock-banner').replaceChildren(activeTheme
-    ? el('span', {}, '🔓 Grupo en liberación: ', el('strong', {}, activeTheme.name), '. Lo que hagas en tus partidas cuenta para sus misiones. Puedes cambiarlo cuando quieras; el progreso de cada grupo se conserva.')
-    : el('span', {}, '🔓 Aún no eliges grupo: tu próxima partida contará para la temática con la que juegues. Elige uno abajo con "Liberar este grupo".'));
+    ? el('span', {}, Icons.svg('unlock'), ' Liberando: ', el('strong', {}, activeTheme.name), ' · tus partidas cuentan para sus misiones')
+    : el('span', {}, Icons.svg('unlock'), ' Sin grupo elegido · cuenta la temática con la que juegues'));
 
   $('collection').replaceChildren(
     ...(progressError ? [el('p', { class: 'alert alert-warning show' }, 'No se pudo leer o guardar tu progreso en el auth-service; se muestran solo los elementos iniciales.')] : []),
@@ -251,7 +251,7 @@ function renderCollection() {
         return el('div', { class: `skin-row ${m.st === 'unlocked' ? '' : 'locked'} ${m.st === 'next' ? 'next' : ''}` },
           visual,
           el('div', { class: 'sk' },
-            el('div', { class: 'sk-name' }, item.name, m.st === 'unlocked' ? '' : ' 🔒'),
+            el('div', { class: 'sk-name' }, m.st === 'unlocked' ? '' : Icons.svg('lock'), item.name),
             el('div', { class: `rarity ${item.rarity}` }, gameConfig.rarities && gameConfig.rarities[item.rarity] ? gameConfig.rarities[item.rarity].label : item.rarity),
             el('div', { class: 'sk-sub' }, m.text),
             m.st === 'next' ? el('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': m.total, 'aria-valuenow': m.have },
@@ -262,7 +262,7 @@ function renderCollection() {
         el('div', { class: 'tdesc' }, `${member ? member.world + ' · de ' + member.name : ''}. ${t.description}`),
         el('div', { class: 'unlock-row' },
           isActive
-            ? el('span', { class: 'unlock-active' }, '🔓 Liberando este grupo')
+            ? el('span', { class: 'unlock-active' }, Icons.svg('unlock'), ' Liberando este grupo')
             : el('button', { class: 'btn btn-small', type: 'button', onclick: () => setUnlockTheme(t.id) }, 'Liberar este grupo'),
           el('span', { class: 'small text-muted' }, `${doneSkins}/${t.skins.length} fichas · ${doneDice}/${t.dice.length} dados`)),
         el('div', { class: 'col-sub' }, 'Fichas'),
@@ -325,6 +325,22 @@ async function loadProgress() {
 // ── Canvas ──────────────────────────────────────────────────────────────
 const canvas = $('game-canvas');
 const ctx = canvas.getContext('2d');
+
+// Ánimo sobre la ficha: etiqueta de texto (sin emojis)
+function drawMood(c, text, x, y) {
+  c.save();
+  c.font = '700 11px "Alegreya Sans", system-ui';
+  const w = c.measureText(text).width + 12;
+  c.fillStyle = 'rgba(242, 212, 138, 0.95)';
+  c.beginPath();
+  if (c.roundRect) c.roundRect(x - w / 2, y - 9, w, 16, 8); else c.rect(x - w / 2, y - 9, w, 16);
+  c.fill();
+  c.fillStyle = '#1d1406';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillText(text, x, y - 1);
+  c.restore();
+}
 let bg = null;
 
 function seeded(seed) {
@@ -448,7 +464,8 @@ function renderCanvas(list) {
     if (img) ctx.drawImage(img, p.x - r * 0.8, p.y - r * 0.8, r * 1.6, r * 1.6);
 
     ctx.textAlign = 'center';
-    if (ex.mood) { ctx.font = '16px system-ui'; ctx.fillText(ex.mood, p.x, p.y - r - 20); }
+    const mood = ex.mood ? Icons.clean(String(ex.mood)).slice(0, 14) : '';
+    if (mood) drawMood(ctx, mood, p.x, p.y - r - 24);
     ctx.font = `${isMe ? '700' : '500'} 13px "Alegreya Sans", system-ui`;
     ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(10,8,14,0.85)';
     ctx.strokeText(p.username, p.x, p.y - r - 6);

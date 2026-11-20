@@ -236,3 +236,11 @@ canvas#game-canvas {
 .col-sub { margin-top: 0.7rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); }
 .skin-row.next { background: color-mix(in srgb, var(--wc) 8%, transparent); border-radius: 8px; padding-left: 0.35rem; }
 .skin-row .die { margin: 0 0.35rem; }
+
+/* Iconos SVG en lugar de emojis */
+.room-emblem { display: inline-grid; place-items: center; line-height: 0; }
+.room-emblem .ic { width: 1.6rem; height: 1.6rem; color: var(--rc, var(--gold-2)); stroke-width: 1.7; }
+.host-ic { width: 0.95em; height: 0.95em; margin-left: 0.25rem; color: var(--gold-2); }
+.sk-name .ic { width: 0.95em; height: 0.95em; margin-right: 0.25rem; color: var(--text-muted); }
+.unlock-active .ic, #unlock-banner .ic { color: var(--gold-2); }
+.player-info .ic { width: 1rem; height: 1rem; color: var(--text-muted); }

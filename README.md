@@ -265,11 +265,23 @@ El campo `auth` es un JWT `{ role: "coordinator" }` firmado con `JWT_SECRET`. As
 
 ## 7. Cliente
 
-1. Login → `GET /coordinator` → WS a `publicUrl/connect?token=…` (`public/js/lib/net.js`). Las peticiones al auth pasan por `public/js/lib/auth.js`, que recorre `AUTH_URLS` y sigue al líder (§13.7). Una **insignia abajo a la izquierda** muestra a qué auth está conectado (`Auth: auth-b (réplica)`).
+1. Login → `GET /coordinator` → WS a `publicUrl/connect?token=…` (`public/js/lib/net.js`). Las peticiones al auth pasan por `public/js/lib/auth.js`, que recorre `AUTH_URLS` y sigue al líder (§13.7). Una **insignia** muestra a qué auth está conectado (`Auth: auth-b (réplica)`): abajo a la izquierda en el login y el lobby, y en la barra superior en el tablero.
 2. La UI muestra el coordinador en la barra superior, en la plaza junto a **"Tick: 20 Hz"**, bajo cada ficha del canvas, en la lista de jugadores y en cada sala ("Alojada en coord-a").
 3. **Si el WS se cae**, el cliente vuelve a pedir `GET /coordinator?exclude=<el caído>`. Los cierres 4001, 4002, 4003 y 4004 son definitivos. Los cierres 4010 (sala en otro coordinador) y 4011 (rebalanceo) son un **cambio de coordinador**.
 4. **Sesión única en toda la mesh**: si el mismo usuario abre sesión en otro coordinador, la vieja se cierra con `4002`.
 5. En la sala de espera, si el cliente pierde o cambia de coordinador, recupera su asiento con la misma temática y ficha.
+6. **Chat**: el coordinador lo replica con la sala. Además, el cliente guarda una copia por sala (`sessionStorage`) y la une con la que llega, así un cambio de coordinador nunca borra mensajes de la pantalla. Lo que se escribe sin conexión queda en cola y se envía al reconectar.
+7. **Tablero**:
+   - Hay una vista 3D (inclinada) y una plana; el botón `3D` o la tecla `V` cambian entre ellas.
+   - El zoom se hace con la rueda y el tablero se mueve arrastrando. Al soltar, el tablero se vuelve a dibujar a la escala real, así que el texto no se pixela.
+   - Los iconos son SVG (`public/js/lib/icons.js`), no emojis.
+8. **Mesa**:
+   - Pestañas: *Mis títulos* (la que se ve por defecto), una por rival y *Todos*.
+   - Los títulos de un mismo grupo de color van en una sola línea, con el contador `2/3`.
+   - Un título hipotecado **se voltea** y muestra el reverso con lo recibido y lo que cuesta levantarlo.
+   - Tiene scroll propio, y su alto se cambia arrastrando el borde superior.
+9. **Logros en vivo**: el coordinador manda en cada estado las estadísticas de la partida en curso, y el cliente las suma a su progreso guardado. Así un logro se avisa en el momento y aparece en el panel *Logros en esta partida*. El auth-service lo guarda al terminar la partida.
+10. **Intercambios**: las acciones (Aceptar, Contraofertar, Enviar) están en un pie fijo de la ventana. Así siguen visibles aunque el formulario sea más alto que la pantalla.
 
 ---
 

@@ -879,7 +879,7 @@ class MonopolyGame {
       this.phase = 'finished';
       this.winnerId = alive[0] ? alive[0].id : null;
       this.turn = null;
-      this.addLog(alive[0] ? `🏆 ¡${alive[0].username} gana la partida!` : 'Partida terminada');
+      this.addLog(alive[0] ? `¡${alive[0].username} gana la partida!` : 'Partida terminada');
       return;
     }
     if (this.turn.playerId === p.id) {
@@ -904,7 +904,7 @@ class MonopolyGame {
     if (this.phase !== 'playing' || !this.turn || this.turn.playerId !== String(id)) return false;
     if (Date.now() < this.turn.deadline) return false;
     const p = this.current();
-    this.addLog(`⏰ Se acabó el tiempo de ${p.username}`);
+    this.addLog(`Se acabó el tiempo de ${p.username}`);
     if (this.turn.debt) {
       this.eliminate(p, null);
     } else {
@@ -920,7 +920,7 @@ class MonopolyGame {
     const p = this.getPlayer(id);
     if (!p || p.bankrupt || p.connected || !p.disconnectedAt) return false;
     if (Date.now() - p.disconnectedAt < graceMs) return false;
-    this.addLog(`🔌 ${p.username} no se reconectó a tiempo y sale de la partida`);
+    this.addLog(`${p.username} no se reconectó a tiempo y sale de la partida`);
     this.eliminate(p, null);
     return true;
   }
@@ -991,7 +991,10 @@ class MonopolyGame {
         jailCards: p.jailCards.length,
         bankrupt: p.bankrupt,
         connected: p.connected,
-        disconnectedAt: p.connected ? null : (p.disconnectedAt || null)
+        disconnectedAt: p.connected ? null : (p.disconnectedAt || null),
+        // Estadísticas de ESTA partida: el cliente las suma a su progreso
+        // guardado para avisar de un logro en el momento en que se consigue.
+        stats: Object.fromEntries(MATCH_STATS.map(k => [k, Number((p.stats || {})[k]) || 0]))
       })),
       properties: this.properties,
       pot: this.pot,

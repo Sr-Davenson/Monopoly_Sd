@@ -463,3 +463,6 @@ code { font-size: 0.9em; color: var(--gold-2); }
 .die.die-xs::after { display: none; }
 .die.die-ach { --die-size: 3.4rem; }
 .die.locked { filter: grayscale(1) brightness(0.55); }
+
+/* Iconos SVG de línea (js/lib/icons.js) */
+.ic { width: 1.15em; height: 1.15em; flex: none; vertical-align: -0.2em; }
