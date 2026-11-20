@@ -63,7 +63,26 @@
     } catch { /* se reintenta en la próxima petición */ }
   }
 
-  let node = load() || { url: URLS[0], authId: null, role: null, leaderUrl: null, leaderId: null };
+  // Si ningún auth responde, se vuelve a pedir /js/config.js: el servidor del
+  // cliente descubre auths por su cuenta (server.js) y la lista puede haber crecido.
+  let lastConfigRefresh = 0;
+  async function refreshConfig() {
+    if (Date.now() - lastConfigRefresh < 5000) return;
+    lastConfigRefresh = Date.now();
+    try {
+      const text = await (await fetch('/js/config.js', { cache: 'no-store' })).text();
+      const m = text.match(/window\.APP_CONFIG\s*=\s*(\{[\s\S]*\})\s*;?\s*$/);
+      const fresh = m ? JSON.parse(m[1]).AUTH_URLS : null;
+      if (!Array.isArray(fresh)) return;
+      const added = fresh.map(clean).filter(u => u && !CONFIGURED.includes(u));
+      if (!added.length) return;
+      CONFIGURED.push(...added);
+      rebuild();
+      console.log(`[AUTH] Nuevos auths desde el servidor del cliente: ${added.join(', ')}`);
+    } catch { /* el servidor del cliente tampoco responde */ }
+  }
+
+  let node = load() ||{ url: URLS[0], authId: null, role: null, leaderUrl: null, leaderId: null };
   if (!URLS.includes(node.url)) node.url = URLS[0];
 
   function load() { try { return JSON.parse(sessionStorage.getItem(STORE_KEY)); } catch { return null; } }
@@ -122,6 +141,7 @@
       return out;
     }
     if (last) return last;
+    refreshConfig();          // quizá el servidor del cliente ya conoce otros auths
     const err = new Error('Ningún auth-service respondió');
     err.network = true;
     throw err;
