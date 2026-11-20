@@ -9,7 +9,17 @@
 //   GET /coordinator?prefer=X     → X si está vivo (anfitrión de una sala)
 //   GET /coordinator?exclude=X    → cualquiera menos X (el que acaba de fallar)
 //   GET /coordinators             → todos, con carga y último latido
-//   GET /peers                    → { coordinatorId, peerUrl } de cada uno
+//   GET /coordinator-peers        → { coordinatorId, peerUrl } de cada uno
+//
+// TALLER 7 (auth replicado): el directorio es estado BLANDO (se reconstruye
+// con los heartbeats cada segundo), pero quien lo administra es el LÍDER:
+//   · POST /heartbeat y POST /leave → solo el líder (réplica: 503 not_leader).
+//   · El líder manda su directorio a las réplicas cada 2 s; las réplicas lo
+//     reflejan y pueden responder GET /coordinator y /coordinators. Así un
+//     cliente consigue coordinador incluso durante una elección.
+//   · Al ganar una elección, el nuevo líder parte del último directorio que
+//     recibió (con el TTL reiniciado) para no tirar a nadie mientras los
+//     coordinadores se reorientan hacia él.
 //
 // REBALANCEO: cada vez que entra un coordinador (nuevo o que vuelve) o sale uno,
 // el directorio recalcula las cargas. Durante REBALANCE_WINDOW_MS, en la
@@ -20,6 +30,8 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const { config } = require('../config');
+const cluster = require('../cluster');
+const { leaderOnly } = require('./cluster');
 
 const router = express.Router();
 const COORD_ID_RE = /^[a-zA-Z0-9_.-]{1,64}$/;
@@ -51,6 +63,7 @@ function isWsUrl(u) {
 
 // Descarta los coordinadores que dejaron de mandar heartbeat
 function sweep() {
+  if (!cluster.isLeader()) return;        // en una réplica manda el directorio del líder
   const now = Date.now();
   for (const [id, c] of coordinators) {
     if (now - c.lastSeen > config.HEARTBEAT_TTL_MS) {
@@ -70,8 +83,37 @@ function alive() {
 // Carga = jugadores reportados + reservas hechas desde el último heartbeat
 const load = (c) => c.connectedPlayers + c.reserved;
 
-// ── POST /heartbeat ───────────────────────────────────────────────────────────
-router.post('/heartbeat', (req, res) => {
+// ── Réplica del directorio entre auth-services ───────────────────────────────
+const pendingOrders = new Map();   // coordinatorId -> { moves, at }  (ver planRebalance)
+
+cluster.setDirectoryHooks({
+  // Líder → réplicas
+  snapshot() {
+    const now = Date.now();
+    return [...coordinators.values()].map(c => ({ ...c, reserved: 0, lastSeenMsAgo: now - c.lastSeen }));
+  },
+  // Réplica: refleja lo que tiene el líder
+  applySnapshot(list) {
+    const now = Date.now();
+    coordinators.clear();
+    for (const c of list) {
+      if (!c || typeof c.coordinatorId !== 'string') continue;
+      const { lastSeenMsAgo, ...rest } = c;
+      coordinators.set(c.coordinatorId, { ...rest, reserved: 0, lastSeen: now - (Number(lastSeenMsAgo) || 0) });
+    }
+  },
+  // Este nodo acaba de ganar la elección
+  onPromoted() {
+    const now = Date.now();
+    for (const c of coordinators.values()) { c.lastSeen = now; c.reserved = 0; }
+    pendingOrders.clear();
+    topologyChangedAt = 0;              // la red de coordinadores no cambió: no se rebalancea
+    if (coordinators.size) console.log(`[DIRECTORY] Nuevo líder: parto del directorio replicado (${[...coordinators.keys()].join(', ')})`);
+  }
+});
+
+// ── POST /heartbeat (solo el líder) ───────────────────────────────────────────
+router.post('/heartbeat', leaderOnly, (req, res) => {
   const { coordinatorId, publicUrl, peerUrl, connectedPlayers, lobbyPlayers, uptime } = req.body || {};
 
   if (typeof coordinatorId !== 'string' || !COORD_ID_RE.test(coordinatorId)) {
@@ -114,7 +156,6 @@ router.post('/heartbeat', (req, res) => {
 // exceso (solo jugadores del lobby) a los que están por debajo del piso.
 // Ej.: 6 jugadores, A=3, B=3 y entra C=0 → A mueve 1 a C y B mueve 1 a C.
 // Cada coordinador recibe su parte de la orden en su siguiente heartbeat.
-const pendingOrders = new Map();   // coordinatorId -> { moves, at }
 const ORDER_TTL_MS = 3000;
 
 function planRebalance(self) {
@@ -214,7 +255,7 @@ router.get('/coordinator', (req, res) => {
 // ── POST /leave ───────────────────────────────────────────────────────────────
 // Un coordinador que se cierra bien avisa para salir del directorio YA (sin
 // esperar el TTL). Exige el JWT de servicio para que nadie saque a otro.
-router.post('/leave', (req, res) => {
+router.post('/leave', leaderOnly, (req, res) => {
   const h = req.headers.authorization || '';
   let service;
   try {
@@ -230,8 +271,9 @@ router.post('/leave', (req, res) => {
   return res.json({ ok: true });
 });
 
-// ── GET /peers ────────────────────────────────────────────────────────────────
-router.get('/peers', (req, res) => {
+// ── GET /coordinator-peers ───────────────────────────────────────────────────
+// (Antes /peers. Desde el Taller 7, GET /peers lista los auth-services.)
+router.get('/coordinator-peers', (req, res) => {
   res.json({ peers: alive().map(c => ({ coordinatorId: c.coordinatorId, peerUrl: c.peerUrl })) });
 });
 
