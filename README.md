@@ -13,6 +13,39 @@ Juego de tablero multijugador en tiempo real. Cuatro mundos comparten el tablero
 
 ---
 
+## Resumen para leer en 10 minutos
+
+**Qué es.** Un Monopoly por turnos (2–6 jugadores) con cuatro temáticas, servido por una red de coordinadores que se replican entre sí y por un auth-service replicado con líder. El servidor decide todo; el cliente solo manda intenciones.
+
+**Cómo se reparte el sistema**
+
+| Pieza | Cuántas | Qué decide | Si cae |
+| --- | --- | --- | --- |
+| `auth-service` | 3 (1 líder + 2 réplicas) | Usuarios, JWT, directorio y balanceo de coordinadores | Las réplicas eligen líder en ~7–9 s; los jugadores conectados no lo notan (§13) |
+| `coordinator` | N (mesh) | Estado de las salas, motor del juego, chat, espectadores | Otro coordinador adopta sus salas; los clientes se reconectan solos (§6) |
+| `client` | estático | Nada: dibuja lo que manda el servidor | Se recarga la página |
+
+**Restricciones del curso: cumplidas.** Servidor autoritativo (el cliente no manda posiciones ni dinero, solo acciones que el motor valida) · sin Redis, Kafka ni librerías de consenso (solo `ws`, `express` y SQLite) · JWT con secret compartida (el coordinador valida el token **sin llamar al auth**) · sin proxy reverso (el cliente conoce `AUTH_URLS` y el balanceo lo hace el auth con `GET /coordinator`) · sin sticky sessions (la afinidad a una sala se logra con la redirección `4010`, no con una cookie).
+
+**Desviaciones justificadas.**
+
+- **Dos tracks en lugar de uno grande**: chat distribuido (principal) y modo espectador (secundario). Comparten la infraestructura del canal de la sala, y el chat solo no mostraría el caso del lector que no escribe (§14).
+- **Subasta de bancarrota**: es una mecánica extra del juego, no un track (§14.3).
+- **Base de datos**: SQLite con `better-sqlite3` (permitida por el curso como persistencia local). Solo el auth-service persiste en disco.
+
+**Qué se evalúa y dónde está**
+
+| Se pide | Dónde |
+| --- | --- |
+| Integración de los 4 talleres | §1–§13 |
+| Track principal (chat) y secundario (espectador) | §14 |
+| Adaptación del juego al modelo autoritativo | §15 |
+| Modos de falla conocidos | §16 |
+| Cómo levantar todo, en local y con túneles | §3 y §9 |
+| Limitaciones y qué haríamos distinto | §12 y §17 |
+
+---
+
 ## 1. Arquitectura
 
 ```mermaid
@@ -545,9 +578,86 @@ Cuando un jugador queda en bancarrota (deuda, rendición, tiempo agotado o desco
 ### 14.4 Cómo demostrarlo
 
 ```bash
-cd coordinator && npm test      # 34 pruebas: motor, subastas y núcleo del chat
+cd coordinator && npm test      # 37 pruebas: motor, subastas y núcleo del chat
 ```
 
 1. **Chat**: tres usuarios en tres coordinadores abren el lobby y escriben a la vez. Todos ven el mismo orden. Con una ráfaga de mensajes aparece *"Vas muy rápido"* y luego *"Silenciado"*.
 2. **Espectador**: pestaña de jugador y pestaña anónima en `spectate.html` → *Observar*. La del espectador ve moverse al jugador y leer el chat, pero no escribe. Desde su consola, `conn.send({type:'game_action', data:{action:'roll'}})` no hace nada.
 3. **Subasta**: en una partida de 3 o más, un jugador con propiedades pulsa *Rendirse*; aparece el panel de subasta para todos, incluidos los espectadores.
+
+---
+
+## 15. Adaptación del juego al modelo autoritativo
+
+La base mínima del curso es un círculo que se mueve en un canvas. Aquí el juego es un **Monopoly por turnos** y el servidor mantiene de forma autoritativa un estado mucho más rico que una posición.
+
+### 15.1 Qué mantiene el servidor
+
+Dentro del estado de cada sala (`coordinator/game/monopoly.js`):
+
+- Jugadores: dinero, posición, cárcel, cartas de salida, ficha, color, conexión.
+- Propiedades: dueño, casas, hipoteca.
+- Turno: de quién es, fase, dados, doble, reloj de turno.
+- Cartas: mazo general y mazo especial de cada temática, con su última carta robada.
+- Deuda, intercambios abiertos y subasta de bancarrota.
+- Estadísticas de la partida, que alimentan los logros y las misiones.
+
+### 15.2 Por qué es autoritativo
+
+- El cliente envía **intenciones** (`roll`, `buy`, `end_turn`, `build`, `mortgage`, `trade_propose`, `auction_bid`…). Nunca envía posiciones ni dinero.
+- El motor valida cada intención contra el estado real: si es el turno de quien la envía, si hay dinero, si la fase lo permite. Una acción inválida se rechaza con un error y no cambia nada.
+- **Los dados los tira el servidor.**
+- El motor no depende de la red (`game/` no importa `ws`), por eso se prueba con `npm test`.
+- El cliente solo dibuja el estado que recibe. Una acción forjada desde DevTools se rechaza igual que cualquier otra inválida.
+
+### 15.3 Cómo se replica
+
+- Una sala vive en su **anfitrión**; los jugadores de la sala se conectan a él (redirección `4010`). Así casi todas las escrituras salen de un único coordinador.
+- Cada cambio se replica como **estado completo** con una versión que solo crece (`room_state`). Si dos coordinadores escriben la misma versión, gana el `writer` con id menor.
+- Si el anfitrión cae, otro adopta la sala **con su estado** (incluidos el turno, los dados y la subasta en curso) y reprograma los temporizadores.
+- Los temporizadores (fin de turno, expulsión por desconexión de 30 s, subasta) los corre **solo el anfitrión**, para que no se disparen dos veces.
+
+### 15.4 Condiciones de victoria y progresión
+
+- Gana quien queda sin bancarrota. El anfitrión reporta el resultado al auth (`POST /internal/match-result`, idempotente por `matchId`).
+- Las partidas desbloquean fichas mediante misiones (jugar, ganar, comprar, construir); el servidor comprueba que la ficha elegida esté desbloqueada (§8).
+- Las bancarrotas disparan una **subasta** de las propiedades (§14.3).
+
+### 15.5 Qué no cuenta como adaptación (y cómo lo tratamos)
+
+El chat **no** es la adaptación del juego: es un track. La adaptación es el estado de juego de §15.1 y su replicación.
+
+---
+
+## 16. Modos de falla conocidos
+
+Qué pasa, qué ve el usuario y por qué es aceptable.
+
+| Falla | Qué ocurre | Qué ve el jugador | Límite o riesgo |
+| --- | --- | --- | --- |
+| Cae un coordinador que no aloja la sala | Sus jugadores se reconectan a otro (`GET /coordinator?exclude=`). La sala sigue en su anfitrión. | Corte de ~1 s y aviso de reconexión | Ninguno relevante |
+| Cae el **anfitrión** de una sala | El líder de la mesh (id menor vivo) adopta la sala, sube la versión y la replica. | Los jugadores se reconectan y siguen | Una acción simultánea a la caída puede perderse (consistencia eventual) |
+| Caen **todos** los coordinadores | El estado de las salas y el chat viven en memoria. | Se pierden las partidas en curso | **No hay persistencia del estado de juego.** Usuarios y progreso sí persisten en SQLite |
+| Cae el líder del auth | Elección en ~7–9 s. Durante ese tiempo `503 no_leader` en escrituras. | Los registros avisan *"Elección de líder en curso…"* y reintentan; los jugadores conectados no notan nada | `GET /coordinator` y los logins en réplicas siguen funcionando |
+| Caen **2 de 3** auths | El que queda no consigue mayoría: no hay líder ni registros, las réplicas no emiten tokens. | No se puede entrar ni registrar; los que ya juegan siguen | Deliberado: evita dos líderes si la red se parte |
+| Auth líder aislado de la red (partición) | A los 6 s sin ver a la mayoría se baja. La mayoría elige otro. | Escrituras fallan unos segundos | Una escritura sin confirmar se descarta en el siguiente sync (`reset`) |
+| Réplica de auth atrasada | Si el atraso es ≥ 10 entradas o no encuentra al usuario, redirige al líder. | Nada o un reintento transparente | Evita el falso "credenciales inválidas" |
+| Túnel del enlace mesh no funciona | Solo el id menor inicia la conexión; si su túnel anda pero el del otro no, no hay enlace. | El panel marca `esperando` o `sin enlace` con el último error | Hay que revisar la URL pública |
+| Mismo usuario abre dos sesiones | La sesión vieja se cierra con `4002`. | Mensaje de sesión reemplazada | Una sola sesión por usuario en toda la mesh |
+| Cliente inunda el coordinador | Cubeta de fichas en el chat, silencio de 15 s y guardia por socket (más de 60 msg/s cierra con `4008`). | *"Vas muy rápido"*, *"Silenciado"* o desconexión | Un cliente legítimo muy rápido puede ser cortado |
+| Demasiados espectadores | Más de `MAX_SPECTATORS` (150) en un coordinador. | `4013 spectators full` | El tope es por coordinador |
+| Mensaje de chat enviado al cortarse un enlace | Puede no llegar a ese par hasta el siguiente `chat_sync`. | Un mensaje llega tarde | El historial de 50 mensajes se reconcilia al reenlazar |
+| `/heartbeat` abierto | Un proceso cualquiera puede anunciar una URL falsa de coordinador. | Posible redirección a un coordinador falso | Pedido por el enunciado; la mesh sí exige credencial |
+| Secret JWT compartida | Cualquier servicio con la secret puede firmar tokens; no hay revocación. | — | Restricción del curso. Los tokens de servicio llevan `role` y la mesh exige `hello` firmado |
+| Log de replicación sin compactar | Un `request_sync` desde 0 manda todo el log. | — | Suficiente para este tamaño |
+
+---
+
+## 17. Qué haríamos distinto
+
+- **Persistir el estado de las salas** en la SQLite de cada coordinador y reconciliar al reentrar a la mesh (track 2.1 del examen). Es la limitación más grande: hoy una caída total pierde las partidas.
+- **Rate limiting y auditoría en el auth, y refresh tokens** (track 2.3). Hoy el JWT dura lo que dura y el login no tiene defensa contra fuerza bruta.
+- **Métricas y trazas** (`/metrics`, `traceId`) para ver el cluster en vivo (track 2.2). Hoy dependemos de los paneles y de los logs.
+- **Compactar el log de replicación del auth** con snapshots.
+- **Pruebas de integración automáticas**: las pruebas de punta a punta se hicieron con scripts manuales, no están en el repositorio.
+- **Integrar antes**: los cuatro talleres y los tracks se unieron al final y hubo que resolver muchos conflictos. Una integración continua habría evitado trabajo.
