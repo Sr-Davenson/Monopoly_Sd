@@ -299,7 +299,7 @@
     } else {
       const e = document.createElement('span');
       e.className = 'token-emoji';
-      e.textContent = (skin && skin.icon) || '●';
+      e.textContent = skin && skin.name ? skin.name.trim().charAt(0).toUpperCase() : '?';   // sin dibujo: inicial del nombre
       span.append(e);
     }
     if (skin && skin.name) span.title = skin.name;

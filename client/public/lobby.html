@@ -11,8 +11,11 @@
   <link rel="stylesheet" href="css/lobby.css" />
   <link rel="stylesheet" href="css/chat.css" />
   <script src="js/config.js"></script>
+  <script src="js/lib/auth.js"></script>
   <script src="js/lib/dom.js"></script>
+  <script src="js/lib/icons.js"></script>
   <script src="js/lib/tokens.js"></script>
+  <script src="js/lib/collection.js"></script>
   <script src="js/lib/net.js"></script>
   <script src="js/lib/sounds.js"></script>
   <script src="js/lib/chat.js"></script>
@@ -87,15 +90,14 @@
             <select id="player-art-picker" title="Fichas que ya desbloqueaste"></select>
           </label>
           <label>Ánimo
-            <select id="player-mood-picker" title="Emoji sobre tu ficha">
+            <select id="player-mood-picker" title="Etiqueta sobre tu ficha">
               <option value="">Ninguno</option>
-              <option value="⚓">⚓ Ancla</option>
-              <option value="🔮">🔮 Hechizo</option>
-              <option value="🪓">🪓 Hacha</option>
-              <option value="📖">📖 Libro</option>
-              <option value="👑">👑 Corona</option>
-              <option value="🔥">🔥 Fuego</option>
-              <option value="⭐">⭐ Estrella</option>
+              <option value="Listo">Listo</option>
+              <option value="A jugar">A jugar</option>
+              <option value="Pensando">Pensando</option>
+              <option value="Competitivo">Competitivo</option>
+              <option value="De paso">De paso</option>
+              <option value="GG">GG</option>
             </select>
           </label>
         </div>
@@ -122,9 +124,10 @@
     </div>
 
     <!-- ── Colección y misiones ─────────────────────────────────────────────── -->
-    <h2 class="section-title">Colección de fichas <small>Cada temática trae una ficha inicial; las demás se desbloquean con misiones</small></h2>
+    <h2 class="section-title">Colección de fichas y dados <small>Libera un grupo a la vez: las misiones de cada partida cuentan para el grupo que elijas, y dentro del grupo las fichas y dados se liberan en orden</small></h2>
     <section class="card">
       <div id="stats" class="stats-row"></div>
+      <div id="unlock-banner" class="unlock-banner"></div>
       <div id="collection" class="collection"><p class="text-muted">Cargando temáticas...</p></div>
     </section>
   </div>

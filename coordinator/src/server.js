@@ -55,7 +55,7 @@ function start() {
   server.listen(config.PORT, () => {
     log('START', `Coordinador ${config.COORDINATOR_ID} en el puerto ${config.PORT}`);
     log('START', `Clientes: ${config.getPublicUrl()}/connect · Pares: ${config.getPeerUrl()}`);
-    log('START', `Panel: http://localhost:${config.PORT}/  · Auth: ${config.AUTH_URL}`);
+    log('START', `Panel: http://localhost:${config.PORT}/  · Auths: ${config.AUTH_URLS.join(', ')}`);
     if (config.legacyPeerPort) log('START', '--peer-port ya no se usa: la mesh va por el mismo puerto (ruta /peer)');
     if (!config.publicUrlFixed) log('START', 'Sin --public-url: buscando un túnel de ngrok hacia este puerto…');
     ngrok.start();

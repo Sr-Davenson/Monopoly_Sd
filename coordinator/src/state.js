@@ -25,7 +25,7 @@ const peers = new Map();
 const rooms = new Map();
 
 // Último listado del directorio (auth-service GET /coordinators)
-const directory = { ok: null, list: [], updatedAt: 0, error: null };
+const directory = { ok: null, list: [], updatedAt: 0, error: null, heartbeatOk: null, leader: null };
 
 const stats = {
   replicated: 0, received: 0, discardedOwnOrigin: 0,

@@ -1,11 +1,14 @@
 {
   "name": "auth-service",
   "version": "1.0.0",
-  "description": "Servicio de autenticación (SQLite, bcrypt, JWT, Google) y directorio de coordinadores (Taller 6)",
+  "description": "Servicio de autenticación replicado (líder + réplicas), directorio de coordinadores y progreso (Taller 7)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "start:a": "node index.js --id auth-a --port 4001 --peer-port 4101 --seed users.db --cluster auth-a=ws://localhost:4101,auth-b=ws://localhost:4102,auth-c=ws://localhost:4103",
+    "start:b": "node index.js --id auth-b --port 4002 --peer-port 4102 --seed users.db --cluster auth-a=ws://localhost:4101,auth-b=ws://localhost:4102,auth-c=ws://localhost:4103",
+    "start:c": "node index.js --id auth-c --port 4003 --peer-port 4103 --seed users.db --cluster auth-a=ws://localhost:4101,auth-b=ws://localhost:4102,auth-c=ws://localhost:4103"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
@@ -14,6 +17,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
     "google-auth-library": "^11.3.3",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "ws": "^8.23.0"
   }
 }

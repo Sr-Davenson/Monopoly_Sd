@@ -9,7 +9,7 @@ Esta guía explica cómo armar la red de coordinadores de **Cuatro Mundos** cuan
 ```mermaid
 flowchart LR
     subgraph Central["PC central (servidor)"]
-        AUTH["auth-service :4000<br/>directorio + balanceador"]
+        AUTH["auth-services replicados<br/>líder + 2 réplicas · directorio + balanceador"]
         WEB["cliente web :3000"]
     end
     subgraph PC1["PC de David"]
@@ -65,37 +65,71 @@ Antes, los coordinadores no se veían entre sí y aparecían uno a la vez. Habí
 
 ## 4. Paso a paso
 
-### 4.1 PC central: auth-service + cliente web
+### 4.0 Reparto recomendado: un rol por PC (Taller 7)
 
-```bash
-# Terminal 1
-cd auth-service && npm start               # http://localhost:4000
+| PC | Corre | Túneles de ngrok |
+| --- | --- | --- |
+| **PC de auths** | `auth-a`, `auth-b`, `auth-c` (puertos 4001–4003) | **3**, uno por auth. La mesh entre auths va por `localhost` (4101–4103): no necesita túneles |
+| **PC de coordinadores** | `coord-a`, `coord-b`, `coord-c` (puertos 5001–5003) | **3**, uno por coordinador |
+| **PC del cliente** | cliente web (puerto 3000) | 1 si otros juegan desde su navegador; 0 si solo se juega en este PC (`http://localhost:3000`) |
 
-# Terminal 2
-cd client && npm start                     # http://localhost:3000
-```
+Cada PC usa **su propia cuenta de ngrok** con un solo agente y un archivo de configuración con sus túneles (§6). Los tres `.env` con `JWT_SECRET` deben tener **el mismo valor** (auth y coordinador).
 
-Necesita **dos túneles**, uno para el auth y otro para el cliente web. Con un solo agente se hace con un archivo de configuración (ver §6) y `ngrok start --all`. Anoten las dos URLs, por ejemplo:
+Por qué el auth necesita 3 túneles: el navegador del cliente y los coordinadores hablan con **cada** auth por separado (prueban la lista y siguen al líder). Si un auth no tiene URL pública, nadie de afuera lo alcanza y, cuando quede como líder, nadie podrá escribir.
 
-```
-https://auth-abc.ngrok-free.app   → localhost:4000
-https://juego-xyz.ngrok-free.app  → localhost:3000
-```
+### 4.1 PC de auths: tres auth-services replicados
 
-En `client/.env` pongan la URL pública del auth y reinicien el cliente:
+1. Túneles (`ngrok config edit`, luego `ngrok start --all`) y anotar las URLs:
+
+   ```yaml
+   tunnels:
+     auth-a: { proto: http, addr: 4001 }
+     auth-b: { proto: http, addr: 4002 }
+     auth-c: { proto: http, addr: 4003 }
+   ```
+
+   ```
+   https://AAA.ngrok-free.app → 4001 · https://BBB.ngrok-free.app → 4002 · https://CCC.ngrok-free.app → 4003
+   ```
+
+2. Tres terminales. Los scripts ya traen el clúster por `localhost`; solo se agrega la URL pública de cada uno después de `--`:
+
+   ```powershell
+   cd auth-service; npm run start:a -- --public-url https://AAA.ngrok-free.app
+   cd auth-service; npm run start:b -- --public-url https://BBB.ngrok-free.app
+   cd auth-service; npm run start:c -- --public-url https://CCC.ngrok-free.app
+   ```
+
+   `--public-url` es la `leaderUrl` que las réplicas entregan a clientes y coordinadores: sin ella entregarían `localhost`.
+
+3. Cada auth abre su **panel** (`http://localhost:4001/`, `:4002/`, `:4003/`): rol, term, barra del último latido del líder, los tres auths con su estado, usuarios, log de replicación y eventos de elección.
+
+> **Auths en PCs distintos** (opcional): la mesh tiene que ir por los túneles. Cada uno arranca con `--peer-url wss://<su túnel>/peer` y todos con `--cluster auth-a=wss://AAA.ngrok-free.app/peer,auth-b=wss://BBB.ngrok-free.app/peer,auth-c=wss://CCC.ngrok-free.app/peer` (además de `--id`, `--port`, `--seed users.db` y `--public-url`).
+
+### 4.1b PC del cliente
+
+En `client/.env`:
 
 ```env
-AUTH_URL=https://auth-abc.ngrok-free.app
+PORT=3000
+AUTH_URLS=https://AAA.ngrok-free.app,https://BBB.ngrok-free.app,https://CCC.ngrok-free.app
+GOOGLE_CLIENT_ID=<el mismo de siempre>
 ```
 
-### 4.2 Cada integrante: su coordinador
+`cd client; npm start` y abrir `http://localhost:3000` (o la URL de su túnel, que debe estar autorizada en Google si se usa ese login).
 
-En `coordinator/.env` (o por línea de comandos):
+### 4.2 Coordinadores
+
+En `coordinator/.env` (o por línea de comandos con `--auth-urls`):
 
 ```env
-JWT_SECRET=<el mismo de todos>
-AUTH_URL=https://auth-abc.ngrok-free.app
+JWT_SECRET=<el mismo del auth>
+AUTH_URLS=https://AAA.ngrok-free.app,https://BBB.ngrok-free.app,https://CCC.ngrok-free.app
 ```
+
+Si los tres coordinadores corren en el **mismo PC**: abrir sus 3 túneles (5001, 5002, 5003) con el archivo de §6 y `ngrok start --all`, y luego `npm run start:a`, `start:b`, `start:c` en tres terminales (sin `--ngrok`: cada uno detecta el túnel de su puerto). Si cada integrante corre el suyo, usen las formas A, B o C de abajo.
+
+El coordinador prueba la lista en orden, manda los heartbeats **al líder** y, si el líder cambia, se reorienta solo (una réplica le responde `503 not_leader` con la `leaderUrl`).
 
 Hay **tres formas** de arrancar. Elijan una:
 
@@ -138,7 +172,8 @@ Por seguridad, el panel solo responde en la máquina del coordinador: por el tú
 Para revisarlo desde la terminal:
 
 ```bash
-curl https://auth-abc.ngrok-free.app/coordinators     # lo que ve el directorio
+curl https://auth-a.ngrok-free.app/coordinators       # lo que ve el directorio (cualquier auth)
+curl https://auth-a.ngrok-free.app/status             # rol del auth (leader / replica)
 curl http://localhost:5001/status                     # pares y salas de un coordinador
 ```
 
@@ -182,9 +217,15 @@ El plan gratis permite **un solo agente** abierto por cuenta. Para exponer vario
 version: "2"
 authtoken: <TU_AUTHTOKEN>
 tunnels:
-  auth:
+  auth-a:
     proto: http
-    addr: 4000
+    addr: 4001
+  auth-b:
+    proto: http
+    addr: 4002
+  auth-c:
+    proto: http
+    addr: 4003
   cliente:
     proto: http
     addr: 3000
@@ -212,8 +253,9 @@ Luego arranquen los coordinadores **sin** `--ngrok`: cada uno encuentra solo el 
 | Otro coordinador aparece en `esperando` mucho tiempo | Él debe abrir el enlace (id menor) pero no te alcanza, normalmente porque tu URL es `localhost`. | Abran el túnel de **ese** lado y del tuyo. |
 | `credencial de coordinador inválida` | `JWT_SECRET` distinto. | Copien el mismo secreto en todos los `.env`. |
 | `conexión a sí mismo (dos coordinadores con el mismo id)` | Dos personas usan el mismo `--id`. | Ids únicos: `coord-<nombre>`. |
-| "Directorio: sin conexión" | `AUTH_URL` mal escrita o el túnel del auth está caído. | Revisen `--auth-url` y que `https://<auth>/health` responda. |
-| Un coordinador aparece y desaparece | La PC se suspende o la red corta los heartbeats (TTL de 6 s). | Desactiven la suspensión o suban `HEARTBEAT_TTL_MS` en el auth. |
+| "Directorio: sin conexión" | Ningún auth de `AUTH_URLS` responde (URLs mal escritas o túneles caídos). | Revisen `--auth-urls` y que `https://<auth>/status` responda. |
+| "Directorio: sin líder (reintentando)" | Los auths están eligiendo líder (unos segundos tras caer el anterior) o solo queda uno vivo de tres (sin mayoría no hay líder). | Esperar ~10 s. Si persiste, revisen `GET /status` de cada auth. |
+| Un coordinador aparece y desaparece | La PC se suspende, o ngrok o la red retrasan los heartbeats más de 3 s (TTL). | Desactiven la suspensión. Si la conexión es lenta, suban `HEARTBEAT_TTL_MS=6000` en `auth-service/.env`. |
 | El navegador muestra la advertencia de ngrok | Visitas directas a la URL del auth o de un coordinador. | Es normal. El juego envía `ngrok-skip-browser-warning` en todas sus peticiones. |
 
 ---
@@ -224,7 +266,7 @@ Luego arranquen los coordinadores **sin** `--ngrok`: cada uno encuentra solo el 
 | --- | --- | --- |
 | `--id` / `COORDINATOR_ID` | `coord-<pc>-<puerto>` | Identificador único en la mesh. |
 | `--port` / `PORT` | `5000` | Puerto único: panel, `/status`, `/connect` (jugadores) y `/peer` (coordinadores). |
-| `--auth-url` / `AUTH_URL` | `http://localhost:4000` | Directorio (auth-service). |
+| `--auth-urls` / `AUTH_URLS` (alias `--auth-url` / `AUTH_URL`) | `http://localhost:4001,…4002,…4003` | Lista de auth-services replicados, separados por coma. |
 | `--public-url` / `PUBLIC_URL` | túnel de ngrok detectado, o `ws://localhost:<puerto>` | URL que se entrega a los jugadores. |
 | `--peer-url` / `PEER_URL` | `<publicUrl>/peer` | URL a la que se conectan los otros coordinadores. |
 | `--ngrok` / `NGROK=1` | apagado | Lanza `ngrok http <puerto>` automáticamente. |

@@ -1,8 +1,28 @@
-// Base de datos SQLite: usuarios, progreso de misiones y partidas reportadas
+// ─────────────────────────────────────────────────────────────────────────────
+// Base de datos SQLite LOCAL de este nodo: usuarios, progreso, partidas y el
+// LOG DE REPLICACIÓN.
+//
+// Toda escritura pasa por applyEntry({ seq, term, op, data }):
+//   · el líder la crea (seq = último + 1) y la aplica;
+//   · las réplicas aplican exactamente la misma entrada que les manda el líder.
+// Como las entradas llevan todos los valores ya decididos (userId, hash,
+// fecha...), aplicar el mismo log en el mismo orden deja BDs idénticas.
+// ─────────────────────────────────────────────────────────────────────────────
+const fs = require('node:fs');
+const path = require('node:path');
 const Database = require('better-sqlite3');
 const { config } = require('./config');
 
+// Nodo nuevo + BD heredada: se copia para que todos arranquen con lo mismo
+fs.mkdirSync(path.dirname(config.DB_PATH), { recursive: true });
+if (config.SEED_DB && !fs.existsSync(config.DB_PATH) && fs.existsSync(config.SEED_DB) &&
+    path.resolve(config.SEED_DB) !== path.resolve(config.DB_PATH)) {
+  fs.copyFileSync(config.SEED_DB, config.DB_PATH);
+  console.log(`[DB] BD nueva sembrada desde ${config.SEED_DB}`);
+}
+
 const db = new Database(config.DB_PATH);
+db.pragma('journal_mode = WAL');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -24,6 +44,22 @@ db.exec(`
     buildings_built    INTEGER NOT NULL DEFAULT 0
   );
 
+  -- Contadores de misiones por ámbito: 'all' (global) o el id de una temática
+  -- (el "grupo en liberación" del jugador cuando terminó la partida)
+  CREATE TABLE IF NOT EXISTS user_counters (
+    user_id  INTEGER NOT NULL,
+    scope    TEXT    NOT NULL,
+    stat     TEXT    NOT NULL,
+    value    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, scope, stat)
+  );
+
+  -- Preferencias del jugador (ficha, color, dado, grupo en liberación) en JSON
+  CREATE TABLE IF NOT EXISTS user_prefs (
+    user_id  INTEGER PRIMARY KEY,
+    data     TEXT NOT NULL
+  );
+
   -- Evita contar dos veces la misma partida si se reporta más de una vez
   CREATE TABLE IF NOT EXISTS matches (
     match_id     TEXT PRIMARY KEY,
@@ -31,17 +67,37 @@ db.exec(`
     reported_by  TEXT,
     finished_at  TEXT DEFAULT CURRENT_TIMESTAMP
   );
+
+  -- Taller 7: log de replicación (una fila por escritura, en orden)
+  CREATE TABLE IF NOT EXISTS replication_log (
+    seq   INTEGER PRIMARY KEY,
+    term  INTEGER NOT NULL,
+    op    TEXT    NOT NULL,
+    data  TEXT    NOT NULL
+  );
+
+  -- Taller 7: estado persistente de la elección (term actual y voto)
+  CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+  );
 `);
 
 const stmts = {
-  insertLocal:    db.prepare("INSERT INTO users (username, provider, password_hash) VALUES (?, 'local', ?)"),
-  insertGoogle:   db.prepare("INSERT INTO users (username, provider, google_sub, email) VALUES (?, 'google', ?, ?)"),
   findByUsername: db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)'),
   findByGoogle:   db.prepare('SELECT * FROM users WHERE google_sub = ?'),
   findById:       db.prepare('SELECT id FROM users WHERE id = ?'),
+  findMatch:      db.prepare('SELECT match_id FROM matches WHERE match_id = ?'),
   getStats:       db.prepare('SELECT * FROM user_stats WHERE user_id = ?'),
-  insertMatch:    db.prepare('INSERT OR IGNORE INTO matches (match_id, room_id, reported_by) VALUES (?, ?, ?)'),
-  addStats:       db.prepare(`
+  nextUserId:     db.prepare('SELECT COALESCE(MAX(id), 0) + 1 AS id FROM users'),
+  countUsers:     db.prepare('SELECT COUNT(*) AS n FROM users'),
+
+  insertUser: db.prepare(`
+    INSERT INTO users (id, username, provider, password_hash, google_sub, email, created_at)
+    VALUES (@userId, @username, @provider, @password_hash, @google_sub, @email, @created_at)
+  `),
+  insertMatch: db.prepare('INSERT OR IGNORE INTO matches (match_id, room_id, reported_by, finished_at) VALUES (?, ?, ?, ?)'),
+  addStats: db.prepare(`
     INSERT INTO user_stats (user_id, games_played, games_won, properties_bought, buildings_built)
     VALUES (@userId, 1, @won, @bought, @built)
     ON CONFLICT(user_id) DO UPDATE SET
@@ -49,7 +105,169 @@ const stmts = {
       games_won         = games_won + @won,
       properties_bought = properties_bought + @bought,
       buildings_built   = buildings_built + @built
-  `)
+  `),
+  setStats: db.prepare(`
+    INSERT OR REPLACE INTO user_stats (user_id, games_played, games_won, properties_bought, buildings_built)
+    VALUES (@userId, @games_played, @games_won, @properties_bought, @buildings_built)
+  `),
+
+  getCounters: db.prepare('SELECT scope, stat, value FROM user_counters WHERE user_id = ?'),
+  addCounter: db.prepare(`
+    INSERT INTO user_counters (user_id, scope, stat, value) VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, scope, stat) DO UPDATE SET value = value + excluded.value
+  `),
+  getPrefs:  db.prepare('SELECT data FROM user_prefs WHERE user_id = ?'),
+  setPrefs:  db.prepare('INSERT OR REPLACE INTO user_prefs (user_id, data) VALUES (?, ?)'),
+
+  lastEntry:  db.prepare('SELECT seq, term FROM replication_log ORDER BY seq DESC LIMIT 1'),
+  termAt:     db.prepare('SELECT term FROM replication_log WHERE seq = ?'),
+  entriesFrom: db.prepare('SELECT seq, term, op, data FROM replication_log WHERE seq > ? ORDER BY seq'),
+  insertLog:  db.prepare('INSERT INTO replication_log (seq, term, op, data) VALUES (?, ?, ?, ?)'),
+  getMeta:    db.prepare('SELECT value FROM meta WHERE key = ?'),
+  setMeta:    db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)')
 };
 
-module.exports = { db, stmts };
+// ── Operaciones replicables ──────────────────────────────────────────────────
+// Una función por tipo de escritura. Deben ser deterministas: todo lo que
+// usan viene en `data`.
+const OPS = {
+  register(d) {
+    stmts.insertUser.run({
+      userId: d.userId, username: d.username, provider: 'local',
+      password_hash: d.password_hash, google_sub: null, email: null, created_at: d.created_at
+    });
+  },
+  register_google(d) {
+    stmts.insertUser.run({
+      userId: d.userId, username: d.username, provider: 'google',
+      password_hash: null, google_sub: d.google_sub, email: d.email || null, created_at: d.created_at
+    });
+  },
+  match_result(d) {
+    const inserted = stmts.insertMatch.run(d.matchId, d.roomId || '', d.reportedBy || '', d.finished_at);
+    if (inserted.changes === 0) return;   // ya estaba
+    for (const p of d.players || []) {
+      const userId = Number(p.userId);
+      if (!stmts.findById.get(userId)) continue;
+      stmts.addStats.run({ userId, won: p.won ? 1 : 0, bought: p.bought, built: p.built });
+
+      // Contadores de misiones. Las entradas antiguas del log (sin `s`) no los
+      // tocan: así un nodo que reaplica el log queda igual que uno que no.
+      if (!p.s) continue;
+      const s = { ...p.s, gamesPlayed: 1, gamesWon: p.won ? 1 : 0 };
+      // Grupo en liberación: el elegido en el lobby o, si nunca eligió, la
+      // temática con la que jugó (y queda guardada como su grupo). Todo sale
+      // de la BD replicada y de `d`, así que es determinista en cada nodo.
+      const prefs = readPrefs(userId);
+      let scope = prefs.unlockTheme || (p.themeId ? String(p.themeId) : null);
+      if (scope && !prefs.unlockTheme) stmts.setPrefs.run(userId, JSON.stringify({ ...prefs, unlockTheme: scope }));
+      for (const [stat, value] of Object.entries(s)) {
+        const n = Math.max(0, Math.floor(Number(value) || 0));
+        if (!n || !/^[a-zA-Z]{1,32}$/.test(stat)) continue;
+        stmts.addCounter.run(userId, 'all', stat, n);
+        if (scope) stmts.addCounter.run(userId, scope, stat, n);
+      }
+    }
+  },
+  // Preferencias del jugador (se guardan completas: ya vienen fusionadas)
+  set_prefs(d) {
+    if (!stmts.findById.get(Number(d.userId))) return;
+    stmts.setPrefs.run(Number(d.userId), JSON.stringify(d.prefs || {}));
+  },
+  // Solo para importar una BD de talleres anteriores (ver importLegacy)
+  import_stats(d) { stmts.setStats.run(d); },
+  import_match(d) { stmts.insertMatch.run(d.matchId, d.roomId || '', d.reportedBy || '', d.finished_at); }
+};
+
+// Aplica una entrada del log (y la guarda) en una sola transacción
+const applyEntry = db.transaction((entry) => {
+  const fn = OPS[entry.op];
+  if (!fn) throw new Error(`op desconocida: ${entry.op}`);
+  fn(entry.data);
+  stmts.insertLog.run(entry.seq, entry.term, entry.op, JSON.stringify(entry.data));
+});
+
+const applyMany = db.transaction((entries) => { for (const e of entries) applyEntry(e); });
+
+// Borra todo y vuelve a aplicar el log del líder (cuando hay divergencia)
+const resetAndApply = db.transaction((entries) => {
+  db.exec('DELETE FROM user_stats; DELETE FROM user_counters; DELETE FROM user_prefs; DELETE FROM matches; DELETE FROM users; DELETE FROM replication_log;');
+  for (const e of entries) applyEntry(e);
+});
+
+function readPrefs(userId) {
+  const r = stmts.getPrefs.get(Number(userId));
+  if (!r) return {};
+  try { const v = JSON.parse(r.data); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
+}
+
+// { all: {stat: n}, tema_x: {stat: n}, ... }
+function readCounters(userId) {
+  const out = {};
+  for (const r of stmts.getCounters.all(Number(userId))) {
+    (out[r.scope] = out[r.scope] || {})[r.stat] = r.value;
+  }
+  return out;
+}
+
+function lastSeq()  { const r = stmts.lastEntry.get(); return r ? r.seq : 0; }
+function lastTerm() { const r = stmts.lastEntry.get(); return r ? r.term : 0; }
+function termAt(seq) {
+  if (seq === 0) return 0;
+  const r = stmts.termAt.get(seq);
+  return r ? r.term : null;
+}
+function entriesFrom(fromSeq) {
+  return stmts.entriesFrom.all(fromSeq).map(r => ({ seq: r.seq, term: r.term, op: r.op, data: JSON.parse(r.data) }));
+}
+function userCount() { return stmts.countUsers.get().n; }
+
+// Para el panel (sin hashes ni datos sensibles)
+const recentUsersStmt = db.prepare('SELECT id, username, provider, created_at FROM users ORDER BY id DESC LIMIT ?');
+const logTailStmt = db.prepare('SELECT seq, term, op, data FROM replication_log ORDER BY seq DESC LIMIT ?');
+function recentUsers(n = 12) { return recentUsersStmt.all(n); }
+function logTail(n = 12) {
+  return logTailStmt.all(n).map(r => {
+    const d = JSON.parse(r.data);
+    const detail = d.username ? `${d.username} (id ${d.userId})`
+      : d.matchId ? `partida ${d.matchId}${d.players ? ` · ${d.players.length} jugadores` : ''}`
+      : d.userId ? `usuario ${d.userId}` : '';
+    return { seq: r.seq, term: r.term, op: r.op, detail };
+  });
+}
+function getMeta(key, fallback = null) { const r = stmts.getMeta.get(key); return r ? r.value : fallback; }
+function setMeta(key, value) { stmts.setMeta.run(key, value == null ? null : String(value)); }
+
+// ── Importar una BD heredada ─────────────────────────────────────────────────
+// Si el log está vacío pero hay datos (users.db de talleres anteriores), se
+// generan entradas term=0 en un orden fijo. Dos nodos sembrados con la misma
+// BD generan EXACTAMENTE el mismo log, así que quedan sincronizados.
+(function importLegacy() {
+  if (lastSeq() > 0 || userCount() === 0) return;
+  let seq = 0;
+  const entries = [];
+  for (const u of db.prepare('SELECT * FROM users ORDER BY id').all()) {
+    entries.push({
+      seq: ++seq, term: 0, op: u.provider === 'google' ? 'register_google' : 'register',
+      data: { userId: u.id, username: u.username, provider: u.provider, password_hash: u.password_hash,
+              google_sub: u.google_sub, email: u.email, created_at: u.created_at }
+    });
+  }
+  for (const s of db.prepare('SELECT * FROM user_stats ORDER BY user_id').all()) {
+    entries.push({ seq: ++seq, term: 0, op: 'import_stats',
+      data: { userId: s.user_id, games_played: s.games_played, games_won: s.games_won,
+              properties_bought: s.properties_bought, buildings_built: s.buildings_built } });
+  }
+  for (const m of db.prepare('SELECT * FROM matches ORDER BY match_id').all()) {
+    entries.push({ seq: ++seq, term: 0, op: 'import_match',
+      data: { matchId: m.match_id, roomId: m.room_id, reportedBy: m.reported_by, finished_at: m.finished_at } });
+  }
+  resetAndApply(entries);
+  console.log(`[DB] BD heredada importada al log de replicación (${entries.length} entradas, ${userCount()} usuarios)`);
+})();
+
+module.exports = {
+  db, stmts, applyEntry, applyMany, resetAndApply,
+  lastSeq, lastTerm, termAt, entriesFrom, userCount, getMeta, setMeta, recentUsers, logTail,
+  readPrefs, readCounters
+};

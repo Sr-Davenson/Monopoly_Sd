@@ -421,3 +421,73 @@ code { font-size: 0.9em; color: var(--gold-2); }
 .spectator-banner strong { font-family: var(--font-head); letter-spacing: 0.08em; color: var(--gold-2); }
 .spectator-banner .btn { width: auto; text-decoration: none; }
 @media (prefers-reduced-motion: reduce) { .spectator-badge { animation: none; } }
+/* ── Taller 7: a qué auth-service está conectado el cliente ───────────────── */
+.auth-badge {
+  position: fixed;
+  left: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 50;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: var(--font-body);
+  pointer-events: auto;
+  user-select: none;
+}
+.auth-badge::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+  vertical-align: middle;
+}
+.auth-badge[data-role="leader"]::before  { background: var(--gold); }
+.auth-badge[data-role="replica"]::before { background: var(--success); }
+.auth-badge[data-role="offline"] { color: var(--danger, #e05252); border-color: var(--danger, #e05252); }
+.auth-badge[data-role="offline"]::before { background: var(--danger, #e05252); animation: auth-blink 1s steps(2) infinite; }
+.auth-badge { transition: border-color .3s, color .3s; }
+@keyframes auth-blink { 50% { opacity: .2; } }
+
+/* ── Dados (compartido: tablero, sala de espera y colección del lobby) ── */
+/* Dado con puntos (3×3) y skin por variables: --die-face1/2, --die-pip, --die-edge, --die-glow */
+.die {
+  --die-size: 3.6rem;
+  position: relative;
+  width: var(--die-size); height: var(--die-size);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  padding: calc(var(--die-size) * 0.14);
+  gap: calc(var(--die-size) * 0.04);
+  background: linear-gradient(145deg, var(--die-face1, #fbf5e6), var(--die-face2, #e8dcc0));
+  border: 2px solid var(--die-edge, #b8995a);
+  border-radius: calc(var(--die-size) * 0.22);
+  box-shadow: 0 5px 12px rgba(0,0,0,.5), inset 0 -3px 0 rgba(0,0,0,.15), 0 0 14px var(--die-glow, transparent);
+  flex: none;
+}
+.die .pip { border-radius: 50%; place-self: center; width: 78%; height: 78%; }
+.die .pip.on { background: var(--die-pip, #2a1e10); box-shadow: inset 0 1px 2px rgba(0,0,0,.35), 0 0 4px var(--die-glow, transparent); }
+.die::after {
+  content: attr(data-mark);
+  position: absolute; right: 6%; bottom: 2%;
+  font-size: calc(var(--die-size) * 0.2);
+  line-height: 1;
+  color: var(--die-pip, #2a1e10);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.die[data-value=""] .pip { background: transparent; }
+.die.die-sm { --die-size: 2.5rem; }
+.die.die-xs { --die-size: 1.5rem; border-width: 1px; }
+.die.die-xs::after { display: none; }
+.die.die-ach { --die-size: 3.4rem; }
+.die.locked { filter: grayscale(1) brightness(0.55); }
+
+/* Iconos SVG de línea (js/lib/icons.js) */
+.ic { width: 1.15em; height: 1.15em; flex: none; vertical-align: -0.2em; }

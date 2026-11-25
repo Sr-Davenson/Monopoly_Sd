@@ -1,5 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Rutas de autenticación: registro, login local y login con Google.
+//
+// Taller 7 — replicación single-writer:
+//   · Escrituras (registro local, primer login con Google): solo el LÍDER.
+//     Una réplica responde 503 { error: 'not_leader', leaderUrl } y el cliente
+//     repite la petición contra leaderUrl. Durante una elección: 503 no_leader.
+//   · Lecturas (login, Google de un usuario existente): cualquier nodo cuyo
+//     lastAppliedSeq esté a menos de LAG_TOLERANCE del líder.
 // ─────────────────────────────────────────────────────────────────────────────
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -7,6 +14,8 @@ const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const { config } = require('../config');
 const { stmts } = require('../db');
+const cluster = require('../cluster');
+const { refuse, leaderOnly, freshRead } = require('./cluster');
 
 const { JWT_SECRET, JWT_EXPIRES_IN, BCRYPT_ROUNDS, GOOGLE_CLIENT_ID } = config;
 const router = express.Router();
@@ -32,17 +41,14 @@ function validateUsername(u) {
   return null; // sin error
 }
 
-function isUniqueConstraintError(err) {
-  return (
-    err &&
-    (err.code === 'SQLITE_CONSTRAINT_UNIQUE' ||
-     err.code === 'SQLITE_CONSTRAINT' ||
-     (err.message && err.message.includes('UNIQUE constraint failed')))
-  );
+// Una réplica que NO encuentra al usuario y está algo atrasada no puede
+// asegurar que no exista (quizá se registró hace un instante): mejor al líder.
+function missingOnStaleReplica() {
+  return !cluster.isLeader() && cluster.lag() > 0 ? cluster.writeRefusal() : null;
 }
 
-// ── POST /register ─────────────────────────────────────────────────────────────
-router.post('/register', async (req, res) => {
+// ── POST /register (ESCRITURA → solo el líder) ────────────────────────────────
+router.post('/register', leaderOnly, async (req, res) => {
   try {
     const { username, password } = req.body || {};
 
@@ -58,27 +64,46 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'La contraseña debe tener al menos 4 caracteres' });
     }
 
-    const existing = stmts.findByUsername.get(cleanUsername);
-    if (existing) return res.status(409).json({ error: 'El nombre de usuario ya está registrado' });
-
-    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    const info = stmts.insertLocal.run(cleanUsername, passwordHash);
-    const userId = String(info.lastInsertRowid);
-
-    console.log(`[AUTH] Registro local: ${cleanUsername} (id: ${userId})`);
-    return res.status(201).json({ userId, username: cleanUsername });
-
-  } catch (err) {
-    if (isUniqueConstraintError(err)) {
+    if (stmts.findByUsername.get(cleanUsername)) {
       return res.status(409).json({ error: 'El nombre de usuario ya está registrado' });
     }
+
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+
+    // El líder decide userId, hash y fecha; las réplicas aplican lo mismo.
+    const out = await cluster.propose(() => {
+      if (stmts.findByUsername.get(cleanUsername)) return { error: 'taken' };
+      return {
+        op: 'register',
+        data: {
+          userId: stmts.nextUserId.get().id,
+          username: cleanUsername,
+          provider: 'local',
+          password_hash: passwordHash,
+          created_at: new Date().toISOString()
+        }
+      };
+    });
+
+    if (!out.ok) {
+      if (out.result && out.result.error === 'taken') {
+        return res.status(409).json({ error: 'El nombre de usuario ya está registrado' });
+      }
+      return refuse(res, out.refusal);
+    }
+
+    const userId = String(out.entry.data.userId);
+    console.log(`[AUTH] Registro local: ${cleanUsername} (id: ${userId}, seq #${out.entry.seq}, confirmado por: ${out.acks.join(', ') || 'solo líder'})`);
+    return res.status(201).json({ userId, username: cleanUsername, seq: out.entry.seq, replicatedTo: out.acks });
+
+  } catch (err) {
     console.error('[AUTH ERROR] /register:', err.message);
     return res.status(500).json({ error: 'Error interno al procesar el registro' });
   }
 });
 
-// ── POST /login ───────────────────────────────────────────────────────────────
-router.post('/login', async (req, res) => {
+// ── POST /login (LECTURA → líder o réplica al día) ────────────────────────────
+router.post('/login', freshRead, async (req, res) => {
   try {
     const { username, password } = req.body || {};
 
@@ -91,7 +116,11 @@ router.post('/login', async (req, res) => {
     if (usernameError) return res.status(400).json({ error: usernameError });
 
     const user = stmts.findByUsername.get(cleanUsername);
-    if (!user) return res.status(401).json({ error: 'Credenciales inválidas' });
+    if (!user) {
+      const stale = missingOnStaleReplica();
+      if (stale) return refuse(res, stale);
+      return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
 
     // IMPORTANTE: usuarios de Google no tienen contraseña — deben usar /auth/google
     if (user.provider !== 'local') {
@@ -103,7 +132,7 @@ router.post('/login', async (req, res) => {
     const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) return res.status(401).json({ error: 'Credenciales inválidas' });
 
-    console.log(`[AUTH] Login local: ${user.username} (id: ${user.id})`);
+    console.log(`[AUTH] Login local: ${user.username} (id: ${user.id}) atendido por ${cluster.SELF} (${cluster.isLeader() ? 'líder' : 'réplica'})`);
     return res.status(200).json({ token: emitToken(user), username: user.username });
 
   } catch (err) {
@@ -118,16 +147,20 @@ router.post('/login', async (req, res) => {
 // Flujo:
 //   1. Cliente obtiene idToken con el botón GSI de Google
 //   2. POST /auth/google { idToken }
-//   3a. Si ya existe → 200 { token, username }
-//   3b. Si es nuevo  → 409 { error: 'username_required' }  (cliente pide username)
+//   3a. Si ya existe → 200 { token, username }                 (lectura)
+//   3b. Si es nuevo  → 409 { error: 'username_required' }      (lectura)
 //   3c. Cliente reenvía { idToken, username }
-//   3d. Se crea el usuario → 200 { token, username }
+//   3d. Se crea el usuario → 200 { token, username }           (ESCRITURA → líder)
 router.post('/auth/google', async (req, res) => {
   const { idToken, username } = req.body || {};
 
   if (typeof idToken !== 'string') {
     return res.status(400).json({ error: 'idToken requerido' });
   }
+
+  // Una réplica muy atrasada (o sin líder) no emite tokens
+  const readRefusal = cluster.readRefusal();
+  if (readRefusal) return refuse(res, readRefusal);
 
   // 1. Verificar el ID token contra las claves públicas de Google
   let payload;
@@ -153,9 +186,11 @@ router.post('/auth/google', async (req, res) => {
   // 3. ¿Ya existe este google_sub en la base?
   const existing = stmts.findByGoogle.get(googleSub);
   if (existing) {
-    console.log(`[AUTH] Login Google existente: ${existing.username} (id: ${existing.id})`);
+    console.log(`[AUTH] Login Google existente: ${existing.username} (id: ${existing.id}) atendido por ${cluster.SELF}`);
     return res.status(200).json({ token: emitToken(existing), username: existing.username });
   }
+  const stale = missingOnStaleReplica();
+  if (stale) return refuse(res, stale);
 
   // 4. Primer login con esta cuenta de Google — necesita elegir username
   if (!username) {
@@ -168,25 +203,40 @@ router.post('/auth/google', async (req, res) => {
   }
 
   // 5. Validar el username elegido
+  if (typeof username !== 'string') return res.status(400).json({ error: 'username debe ser string' });
   const cleanUsername = username.trim().toLowerCase();
   const usernameError = validateUsername(cleanUsername);
   if (usernameError) return res.status(400).json({ error: usernameError });
 
-  // 6. Crear el usuario Google
-  try {
-    const result  = stmts.insertGoogle.run(cleanUsername, googleSub, email);
-    const newUser = { id: result.lastInsertRowid, username: cleanUsername, provider: 'google' };
+  // 6. Crear el usuario Google: ESCRITURA → solo el líder
+  const out = await cluster.propose(() => {
+    if (stmts.findByUsername.get(cleanUsername)) return { error: 'username_taken' };
+    if (stmts.findByGoogle.get(googleSub)) return { error: 'already_linked' };
+    return {
+      op: 'register_google',
+      data: {
+        userId: stmts.nextUserId.get().id,
+        username: cleanUsername,
+        provider: 'google',
+        google_sub: googleSub,
+        email,
+        created_at: new Date().toISOString()
+      }
+    };
+  });
 
-    console.log(`[AUTH] Registro Google: ${cleanUsername} (id: ${newUser.id}, email: ${email})`);
-    return res.status(200).json({ token: emitToken(newUser), username: cleanUsername });
-
-  } catch (err) {
-    if (isUniqueConstraintError(err)) {
-      return res.status(409).json({ error: 'username_taken' });
+  if (!out.ok) {
+    if (out.result && out.result.error === 'username_taken') return res.status(409).json({ error: 'username_taken' });
+    if (out.result && out.result.error === 'already_linked') {
+      const user = stmts.findByGoogle.get(googleSub);
+      return res.status(200).json({ token: emitToken(user), username: user.username });
     }
-    console.error('[AUTH ERROR] /auth/google:', err.message);
-    return res.status(500).json({ error: 'internal' });
+    return refuse(res, out.refusal);
   }
+
+  const newUser = { id: out.entry.data.userId, username: cleanUsername, provider: 'google' };
+  console.log(`[AUTH] Registro Google: ${cleanUsername} (id: ${newUser.id}, email: ${email}, seq #${out.entry.seq})`);
+  return res.status(200).json({ token: emitToken(newUser), username: cleanUsername });
 });
 
 module.exports = router;

@@ -7,6 +7,7 @@ Juego de tablero multijugador en tiempo real. Cuatro mundos comparten el tablero
 - **Balanceo de carga**: el auth-service manda a cada jugador al coordinador menos cargado y reparte los empates por turnos (10 jugadores y 2 coordinadores quedan 5 y 5). **Cada vez que entra o sale un coordinador, recalcula las cargas y vuelve a repartir** a los jugadores del lobby en 1–2 s.
 - **Replicación y tolerancia a fallos**: todas las salas y jugadores se replican. Si el anfitrión de una sala cae, otro coordinador la adopta con su estado.
 - **Panel del coordinador**: al arrancar se abre una página con los demás coordinadores de la red y el estado del enlace con cada uno.
+- **Auth-service replicado (Taller 7)**: tres auth-services, **un líder y dos réplicas** (*single-writer replication*). Solo el líder escribe; las réplicas copian su log y atienden lecturas. Si el líder muere, las réplicas eligen otro en ~7–9 s y el sistema sigue aceptando registros. Clientes y coordinadores usan una **lista** `AUTH_URLS` y se reorientan solos. Ver [§13](#13-auth-service-replicado-taller-7).
 
 > **Tutorial para conectar X coordinadores con ngrok:** [`docs/COORDINADORES_NGROK.md`](docs/COORDINADORES_NGROK.md)
 
@@ -22,13 +23,15 @@ flowchart LR
         G["game.html?sala=X&coord=Y<br/>tablero"]
     end
 
-    subgraph Auth["auth-service :4000"]
+    subgraph Auth["auth-services replicados (:4001 · :4002 · :4003)"]
         A1[POST /register · /login · /auth/google]
         A2[POST /heartbeat]
         A3[GET /coordinator<br/>balanceo · prefer · exclude]
-        A4[GET /coordinators · /peers]
+        A4[GET /coordinators · /status · /peers]
         A5[GET /me/progress<br/>POST /internal/match-result]
-        DB[(SQLite)]
+        DB[(SQLite local<br/>+ log de replicación)]
+        AL{{auth-a líder}} -->|write_propagate · heartbeat| AR1{{auth-b réplica}}
+        AL --> AR2{{auth-c réplica}}
     end
 
     subgraph Mesh["Coordinadores (un puerto c/u: /connect + /peer + panel)"]
@@ -40,17 +43,17 @@ flowchart LR
         CB <--> CX
     end
 
-    L -->|1. login → JWT| A1
+    L -->|1. login → JWT · cualquier auth de AUTH_URLS| A1
     LB -->|2. GET /coordinator| A3
     LB -->|3. WS /connect| CB
     G -->|"GET /coordinator?prefer=anfitrión → WS"| CA
-    CA & CB & CX -->|heartbeat cada 1 s| A2
+    CA & CB & CX -->|heartbeat cada 1 s · al LÍDER| A2
     CA & CB & CX -->|descubrir pares| A4
 ```
 
 | Componente | Responsabilidad |
 | --- | --- |
-| `auth-service/` | Usuarios (bcrypt + JWT + Google). **Directorio de coordinadores y balanceador**: recibe heartbeats, descarta los que llevan más de 3 s sin latir (o que se despiden con `/leave`), **rebalancea** cuando cambia la red y responde `/coordinator`, `/coordinators` y `/peers`. Guarda el progreso de misiones. |
+| `auth-service/` | Usuarios (bcrypt + JWT + Google). **Directorio de coordinadores y balanceador**: recibe heartbeats, descarta los que llevan más de 3 s sin latir (o que se despiden con `/leave`), **rebalancea** cuando cambia la red y responde `/coordinator`, `/coordinators` y `/coordinator-peers`. Guarda el progreso de misiones. **Se corre replicado** (3 procesos): un líder que escribe y réplicas que copian su log (ver §13). |
 | `coordinator/` | Atiende a sus clientes por WS, forma la mesh con los demás coordinadores, aloja las salas que crean sus jugadores, replica todo y corre la plaza a 20 Hz. Abre su **panel** en el navegador. |
 | `client/` | Login, lobby (crear y listar salas, plaza en canvas, jugadores en línea, colección) y tablero. Pide coordinador al auth antes de abrir cada WS y se reconecta o se cambia de coordinador solo. |
 
@@ -60,12 +63,16 @@ flowchart LR
 
 ```text
 auth-service/
-  index.js                     Arranque: monta las rutas
-  src/config.js                Variables del .env
-  src/db.js                    SQLite (usuarios, progreso, partidas)
+  index.js                     Arranque: monta las rutas y el clúster
+  src/config.js                Línea de comandos (--id, --port, --cluster…) + .env
+  src/db.js                    SQLite local (usuarios, progreso, partidas) + log de replicación + term/voto
+  src/cluster.js               Mesh de auths: líder/réplica, propagación con ACK, sync, elección
+  src/routes/cluster.js        /status · /peers + guardas leaderOnly / freshRead
   src/routes/auth.js           /register · /login · /auth/google
-  src/routes/directory.js      /heartbeat · /leave · /coordinator (balanceo y rebalanceo) · /coordinators · /peers
+  src/routes/directory.js      /heartbeat · /leave · /coordinator (balanceo y rebalanceo) · /coordinators · /coordinator-peers
   src/routes/progress.js       /me/progress · /internal/match-result
+  src/panel.js · src/events.js API del panel del auth y eventos recientes
+  panel/index.html · panel.css · panel.js     Panel del auth (rol, term, elecciones, BD, log)
 
 coordinator/
   index.js                     Arranque
@@ -77,7 +84,8 @@ coordinator/
   src/rooms.js                 Salas creadas por jugadores (anfitrión, réplica, timers, adopción)
   src/broadcast.js             Difusión a los clientes locales
   src/loop.js                  Game loop de la plaza (20 Hz)
-  src/directory.js             Heartbeat y descubrimiento de pares
+  src/directory.js             Heartbeat (al líder) y descubrimiento de pares
+  src/auth.js                  Cliente de AUTH_URLS: fallback y seguimiento del líder
   src/ngrok.js                 Detecta (o lanza) el túnel de ngrok
   src/panel.js                 API del panel y apertura del navegador
   panel/index.html · panel.css · panel.js     Panel del coordinador
@@ -87,7 +95,7 @@ client/
   server.js                    Sirve public/ y genera /js/config.js
   public/login.html · lobby.html · game.html   Solo marcado (sin CSS ni JS en línea)
   public/css/                  styles.css (base) · login.css · lobby.css · game.css
-  public/js/lib/               dom.js · net.js · tokens.js · sounds.js (compartidos)
+  public/js/lib/               auth.js (AUTH_URLS + insignia) · dom.js · net.js · tokens.js · sounds.js (compartidos)
   public/js/pages/             login.js · lobby.js · game.js (uno por página)
 
 docs/  COORDINADORES_NGROK.md · ECONOMIA.md · PLANTILLAS.md
@@ -105,8 +113,14 @@ cd auth-service && npm install && cd ..
 cd coordinator  && npm install && cd ..
 cd client       && npm install && cd ..
 
-# 1) Auth-service + directorio
-cd auth-service && npm start                 # http://localhost:4000
+# 1) Tres auth-services replicados (una terminal por cada uno)
+cd auth-service && npm run start:a           # auth-a · http://localhost:4001 · mesh ws://localhost:4101
+cd auth-service && npm run start:b           # auth-b · http://localhost:4002 · mesh ws://localhost:4102
+cd auth-service && npm run start:c           # auth-c · http://localhost:4003 · mesh ws://localhost:4103
+#    Cada auth abre su panel (http://localhost:4001/ …) — con --no-panel no lo abre.
+#    A los ~7 s uno queda como leader:  curl http://localhost:4001/status
+#    (npm start sigue levantando un solo auth en :4000, como en talleres anteriores;
+#     en ese caso usen AUTH_URLS=http://localhost:4000 en cliente y coordinadores)
 
 # 2) Coordinadores (una terminal por cada uno; cada uno abre su panel)
 cd coordinator && npm run start:a            # coord-a · http://localhost:5001
@@ -122,15 +136,24 @@ Cualquier otro coordinador: `node index.js --id coord-x --port 5004`. Con ngrok:
 | Servicio | Variable | Por defecto | Uso |
 | --- | --- | --- | --- |
 | auth | `PORT`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `DB_PATH`, `GOOGLE_CLIENT_ID` | | Igual que en talleres anteriores |
+| auth | `--id`, `--port`, `--peer-port`, `--public-url`, `--peer-url` | `auth-<port>`, `4000`, `port+100`, `http://localhost:<port>`, `ws://localhost:<peer-port>` | Identidad del nodo. `--public-url` es la `leaderUrl` que se entrega a los demás |
+| auth | `--cluster` / `AUTH_CLUSTER` | (vacío = nodo único) | `auth-a=ws://…:4101,auth-b=ws://…:4102,auth-c=ws://…:4103`. La **misma** lista en los tres |
+| auth | `--db`, `--seed` | `data/<id>.db`, — | BD local del nodo · BD heredada para sembrar un nodo nuevo (los scripts usan `users.db`) |
+| auth | `--no-panel` / `OPEN_PANEL=0` | | No abrir el panel del auth en el navegador al arrancar |
+| auth | `LEADER_HEARTBEAT_MS`, `ELECTION_TIMEOUT_MS`, `ELECTION_JITTER_MS` | `2000`, `6000`, `1500` | Latido del líder · sin latido este tiempo → elección · azar para evitar empates |
+| auth | `WRITE_ACK_TIMEOUT_MS`, `LAG_TOLERANCE` | `3000`, `10` | Espera de ACK de la mayoría (opción B) · atraso máximo para leer en una réplica |
 | auth | `HEARTBEAT_TTL_MS` | `3000` | Sin heartbeat durante este tiempo → coordinador muerto |
 | auth | `REBALANCE_WINDOW_MS`, `REBALANCE_COOLDOWN_MS` | `30000`, `1000` | Tiempo que se sigue rebalanceando tras un cambio en la red / pausa mínima entre planes |
-| coordinator | `--id`, `--port`, `--auth-url`, `--public-url`, `--ngrok`, `--no-panel` | | Ver tutorial §8 |
+| coordinator | `--id`, `--port`, `--auth-urls`, `--public-url`, `--ngrok`, `--no-panel` | | Ver tutorial §8 |
+| coordinator | `--auth-urls` / `AUTH_URLS` | `http://localhost:4001,…4002,…4003` | Lista de auths (también acepta `--auth-url` / `AUTH_URL` con una o varias URLs) |
 | coordinator | `TURN_TIMEOUT_MS`, `MAX_ROOMS`, `ROOM_EMPTY_MS`, `ROOM_ABANDON_MS` | `90000`, `24`, `60000`, `90000` | Tiempo por turno, límite de salas, borrar sala vacía o abandonada |
-| client | `PORT`, `AUTH_URL`, `GOOGLE_CLIENT_ID` | | El cliente **no tiene** URL de coordinador fija |
+| client | `PORT`, `AUTH_URLS`, `GOOGLE_CLIENT_ID` | `AUTH_URLS=http://localhost:4001,…4002,…4003` | El cliente **no tiene** URL de coordinador fija. `AUTH_URL` (una sola) sigue funcionando |
 
 ---
 
 ## 4. Endpoints del directorio (auth-service)
+
+> Con el auth replicado (§13), `POST /heartbeat` y `POST /leave` los atiende **solo el líder** (una réplica responde `503 not_leader` con la `leaderUrl`). `GET /coordinator` y `GET /coordinators` los responde **cualquier** auth: las réplicas reciben una copia del directorio del líder cada 2 s. Los ejemplos usan `:4000` (nodo único); en clúster sirven igual contra `:4001`–`:4003`.
 
 ### `POST /heartbeat` — cada coordinador, cada 1 s
 
@@ -177,9 +200,9 @@ curl http://localhost:4000/coordinator?exclude=coord-b    # cualquiera menos el 
 - **Empates por turnos** (round-robin): con carga igual, se alternan.
 - **`prefer`**: lo usa el tablero para ir al anfitrión de la sala. Si ese coordinador no está vivo, se aplica el balanceo normal.
 
-### `GET /coordinators` y `GET /peers`
+### `GET /coordinators` y `GET /coordinator-peers`
 
-`/coordinators` lista todos los vivos con carga, uptime y `lastSeenMsAgo`. Lo usan los coordinadores para descubrir pares y para su panel. `/peers` es la versión corta (`coordinatorId`, `peerUrl`).
+`/coordinators` lista todos los vivos con carga, uptime y `lastSeenMsAgo`. Lo usan los coordinadores para descubrir pares y para su panel. `/coordinator-peers` es la versión corta (`coordinatorId`, `peerUrl`). **Antes se llamaba `/peers`**: desde el Taller 7, `GET /peers` lista los **auth-services** del clúster.
 
 ### Otros
 
@@ -242,11 +265,23 @@ El campo `auth` es un JWT `{ role: "coordinator" }` firmado con `JWT_SECRET`. As
 
 ## 7. Cliente
 
-1. Login → `GET /coordinator` → WS a `publicUrl/connect?token=…` (`public/js/lib/net.js`).
+1. Login → `GET /coordinator` → WS a `publicUrl/connect?token=…` (`public/js/lib/net.js`). Las peticiones al auth pasan por `public/js/lib/auth.js`, que recorre `AUTH_URLS` y sigue al líder (§13.7). Una **insignia** muestra a qué auth está conectado (`Auth: auth-b (réplica)`): abajo a la izquierda en el login y el lobby, y en la barra superior en el tablero.
 2. La UI muestra el coordinador en la barra superior, en la plaza junto a **"Tick: 20 Hz"**, bajo cada ficha del canvas, en la lista de jugadores y en cada sala ("Alojada en coord-a").
 3. **Si el WS se cae**, el cliente vuelve a pedir `GET /coordinator?exclude=<el caído>`. Los cierres 4001, 4002, 4003 y 4004 son definitivos. Los cierres 4010 (sala en otro coordinador) y 4011 (rebalanceo) son un **cambio de coordinador**.
 4. **Sesión única en toda la mesh**: si el mismo usuario abre sesión en otro coordinador, la vieja se cierra con `4002`.
 5. En la sala de espera, si el cliente pierde o cambia de coordinador, recupera su asiento con la misma temática y ficha.
+6. **Chat**: el coordinador lo replica con la sala. Además, el cliente guarda una copia por sala (`sessionStorage`) y la une con la que llega, así un cambio de coordinador nunca borra mensajes de la pantalla. Lo que se escribe sin conexión queda en cola y se envía al reconectar.
+7. **Tablero**:
+   - Hay una vista 3D (inclinada) y una plana; el botón `3D` o la tecla `V` cambian entre ellas.
+   - El zoom se hace con la rueda y el tablero se mueve arrastrando. Al soltar, el tablero se vuelve a dibujar a la escala real, así que el texto no se pixela.
+   - Los iconos son SVG (`public/js/lib/icons.js`), no emojis.
+8. **Mesa**:
+   - Pestañas: *Mis títulos* (la que se ve por defecto), una por rival y *Todos*.
+   - Los títulos de un mismo grupo de color van en una sola línea, con el contador `2/3`.
+   - Un título hipotecado **se voltea** y muestra el reverso con lo recibido y lo que cuesta levantarlo.
+   - Tiene scroll propio, y su alto se cambia arrastrando el borde superior.
+9. **Logros en vivo**: el coordinador manda en cada estado las estadísticas de la partida en curso, y el cliente las suma a su progreso guardado. Así un logro se avisa en el momento y aparece en el panel *Logros en esta partida*. El auth-service lo guarda al terminar la partida.
+10. **Intercambios**: las acciones (Aceptar, Contraofertar, Enviar) están en un pie fijo de la ventana. Así siguen visibles aunque el formulario sea más alto que la pantalla.
 
 ---
 
@@ -278,8 +313,9 @@ La moneda son los **Doblones (Đ)**. Las fichas son dibujos SVG propios (`client
 
 El tutorial completo está en **[`docs/COORDINADORES_NGROK.md`](docs/COORDINADORES_NGROK.md)**. En resumen:
 
-- PC central: túneles para el **auth** (4000) y el **cliente** (3000). En `client/.env`: `AUTH_URL=https://<auth>.ngrok-free.app`.
-- Cada integrante: `node index.js --id coord-<nombre> --port 5001 --auth-url https://<auth>.ngrok-free.app --ngrok`. **Un solo túnel por coordinador**, porque la mesh va por `/peer` en el mismo puerto.
+- Reparto recomendado: un PC para los **3 auths** (3 túneles), uno para los **3 coordinadores** (3 túneles) y uno para el **cliente**. Ver el [tutorial §4.0](docs/COORDINADORES_NGROK.md#40-reparto-recomendado-un-rol-por-pc-taller-7).
+- PC de auths: `npm run start:a -- --public-url https://<túnel-a>` (igual con `b` y `c`). La mesh entre auths va por `localhost`. En `client/.env`: `AUTH_URLS=https://<túnel-a>,https://<túnel-b>,https://<túnel-c>`.
+- Cada integrante: `node index.js --id coord-<nombre> --port 5001 --auth-urls https://<auth-a>,https://<auth-b>,https://<auth-c> --ngrok`. **Un solo túnel por coordinador**, porque la mesh va por `/peer` en el mismo puerto.
 - Si ngrok ya está abierto, el coordinador detecta el túnel de su puerto y anuncia `wss://…` sin configurar nada.
 
 ---
@@ -292,6 +328,32 @@ El tutorial completo está en **[`docs/COORDINADORES_NGROK.md`](docs/COORDINADOR
 4. **Observar (1 min).** Un tercero en `coord-b` pulsa "Observar partida" y también se cambia a `coord-a`.
 5. **Matar el anfitrión (3 min).** `Ctrl+C` en `coord-a`. Al instante (Ctrl+C avisa con `/leave`; si el proceso muere sin avisar, en 3 s) el auth lo descarta y `coord-b` adopta la sala ("Adopto la sala…" en su panel). Los jugadores se reconectan solos y siguen la partida.
 6. **Sumar un coordinador en vivo (1 min).** `node index.js --id coord-x --port 5009`. Aparece en los paneles de todos y empieza a recibir jugadores.
+
+### 10.1 Sustentación del Taller 7 (auth replicado)
+
+Antes de empezar: levantar `start:a`, `start:b`, `start:c` del auth, tres coordinadores y el cliente, y **dejar un jugador moviéndose en la plaza** durante toda la demo (el círculo no debe detenerse: el coordinador valida el JWT sin consultar al auth).
+
+```bash
+# Ayuda: estado de los tres auths en una línea
+for p in 4001 4002 4003; do curl -s localhost:$p/status; echo; done
+```
+
+Lo más visual es el **panel de cada auth** (`http://localhost:4001/`, `:4002/`, `:4003/` en el PC de los auths). Muestra:
+- el rol y el term;
+- una barra con el tiempo desde el último latido del líder (se pone roja antes de declararlo muerto);
+- tarjetas de los tres auths: ★ líder, réplica o caído;
+- los usuarios y el log de replicación de la BD local;
+- los eventos de elección y votos.
+
+Conviene tener abierto el panel de una réplica mientras se mata al líder.
+
+1. **Tres auths (3 min).** `GET /status` de cada uno: uno dice `"role":"leader"`, los otros dos `"replica"`, y los tres muestran el mismo `users` y `lastAppliedSeq`. `GET /peers` muestra el rol de cada nodo.
+2. **Registrar alice (3 min).** Desde la página de login (o `curl -X POST localhost:4002/register -H "Content-Type: application/json" -d '{"username":"alice","password":"1234"}'`). Si le pegan a una réplica, responde `503 {"error":"not_leader","leaderUrl":…}` y el cliente repite contra el líder solo. Luego los tres `/status` muestran `users: N+1`. La consola del líder imprime `Escritura #… confirmada por auth-x → se responde al cliente`.
+3. **Matar al líder (2 min).** `Ctrl+C` en su terminal. A los ~6 s las réplicas imprimen `Sin heartbeat de … → líder caído`, una se postula y gana (`★ auth-x es el NUEVO LÍDER (term 2…)`). A los ~10 s, `GET /status` de las dos vivas: una es `leader`. Los coordinadores muestran `Heartbeat aceptado por el líder auth-x` y la insignia del cliente cambia de auth si hace falta.
+4. **Registrar bob (4 min).** Igual que alice: el nuevo líder lo acepta y lo propaga a la réplica viva (`users: N+2` en ambas).
+5. **Revivir el auth muerto (3 min).** `npm run start:<x>` otra vez. Arranca como réplica, se enlaza, ve que su `lastSeq` está atrasado e imprime `request_sync` → `Sync completo … usuarios: N+2`. `GET /status` muestra `"role":"replica"`: **no recupera el liderazgo**.
+
+Durante todo esto, el jugador de la plaza no se desconecta.
 
 ---
 
@@ -313,6 +375,22 @@ También se corrió una prueba de punta a punta (auth + 2 coordinadores + client
 - el panel solo responde en local;
 - al matar A, B adopta la sala.
 
+**Taller 7** — pruebas de punta a punta con 3 auths, 2 coordinadores y un jugador WS (BDs temporales):
+
+| Escenario | Resultado medido |
+| --- | --- |
+| Arranque de los 3 auths | A los ~7 s hay un líder (term 1) y dos réplicas; los tres con el mismo `users` |
+| `POST /register` contra una réplica | `503 not_leader` + `leaderUrl` → reintento en el líder → `201`, confirmado por 1 réplica; los 3 nodos suben `users` |
+| `POST /login` en una réplica al día | `200` con token emitido por la réplica |
+| Registro 3 s después de matar al líder | `503 no_leader` (elección en curso) |
+| Elección | Nuevo líder en ~7–9 s tras el `Ctrl+C` (term 2) |
+| Registro tras la elección vía la réplica | `503 not_leader` → nuevo líder → `201`, propagado |
+| Revivir el ex-líder | Vuelve como `replica`, `request_sync` y queda con `users` al día; login en él → `200` |
+| Cliente web (`AuthApi`) registrando **mientras** no hay líder | Avisa *"Elección de líder en curso…"* y reintenta; `201` del nuevo líder a los ~8 s |
+| Jugador en la plaza durante todo lo anterior | WebSocket abierto todo el tiempo, `state` a 20 Hz sin cortes |
+| `GET /coordinator` en una réplica durante la elección | `200` (directorio replicado) |
+| Coordinadores | Heartbeat falla con `no_leader` unos segundos y luego `Heartbeat aceptado por el líder auth-x` |
+
 ---
 
 ## 12. Decisiones y límites conocidos
@@ -322,14 +400,115 @@ También se corrió una prueba de punta a punta (auth + 2 coordinadores + client
 - **Enlace mesh**: solo el id menor inicia la conexión. Si su túnel funciona pero el del otro no, el enlace no se forma. El panel lo muestra como `esperando` o `sin enlace` con el último error.
 - **Desbalance por salas**: el lobby se reparte por igual, pero los jugadores de una sala se concentran en su anfitrión. Es la regla pedida.
 - El estado vive en memoria: mientras quede **al menos un coordinador vivo**, las salas sobreviven. El progreso de misiones persiste en SQLite.
+- **Auth replicado: hace falta mayoría.** Con 3 auths el sistema tolera la caída de **uno**. Si caen dos, el que queda no puede ganar una elección (necesita 2 votos): no hay líder, no hay registros y las réplicas no emiten tokens (`503 no_leader`). Es a propósito: evita tener dos líderes si la red se parte. Los jugadores que ya están conectados siguen jugando.
+- **Escrituras durante una elección**: fallan unos segundos (`503 no_leader`). El cliente web reintenta solo (hasta ~12 s) y avisa en pantalla; los coordinadores reintentan el heartbeat cada segundo.
+- **Log sin compactar**: el log de replicación guarda todas las escrituras desde el principio. Para el tamaño del proyecto es suficiente; un `request_sync` desde 0 manda todo el log.
 
 ---
 
-## 13. Tracks del examen final
+## 13. Auth-service replicado (Taller 7)
+
+Antes, si se caía el auth, nadie nuevo podía entrar y nadie podía pedir otro coordinador: el corazón del sistema era único. Ahora hay **tres auth-services** con **replicación single-writer**: un líder a la vez acepta escrituras; las réplicas copian su log, atienden lecturas y eligen un líder nuevo si el actual muere.
+
+### 13.1 Roles
+
+| | leader | replica |
+| --- | --- | --- |
+| Escrituras (`/register`, primer `/auth/google`, `/internal/match-result`, `/heartbeat`, `/leave`) | Las aplica, las guarda en el log y las propaga | `503 {"error":"not_leader","leaderUrl":"…"}` · durante una elección `503 {"error":"no_leader"}` |
+| Lecturas que emiten token (`/login`, `/auth/google` de un usuario existente) y `/me/progress` | Sí | Sí, si `leaderSeq − mySeq < LAG_TOLERANCE` (10). Si no, `503 not_leader` |
+| `GET /coordinator`, `/coordinators` | Sí | Sí, con la copia del directorio que manda el líder |
+| Latidos | Manda `heartbeat` cada 2 s | Si pasan 6 s (3 latidos) sin oírlo, inicia una elección |
+
+Un nodo arranca siempre como **réplica**. Si encuentra un líder vivo, lo sigue; si no, a los 6 s (más un azar de hasta 1,5 s) se postula.
+
+### 13.2 Endpoints nuevos
+
+```bash
+curl localhost:4001/status
+# {"authId":"auth-a","role":"leader","publicUrl":"http://localhost:4001","peerUrl":"ws://localhost:4101",
+#  "leaderUrl":"http://localhost:4001","leaderId":"auth-a","term":1,"electionInProgress":false,
+#  "knownPeers":["auth-b","auth-c"],"clusterSize":3,"lastAppliedSeq":3,"leaderLastSeq":3,"lag":0,"users":3, …}
+
+curl localhost:4002/peers
+# {"peers":[{"authId":"auth-a","publicUrl":"http://localhost:4001","peerUrl":"ws://localhost:4101","role":"leader","connected":true,"lastSeq":3},
+#           {"authId":"auth-b",…,"role":"replica","self":true}, {"authId":"auth-c",…,"role":"replica"}]}
+```
+
+`knownPeers` son los auths con los que hay enlace en este momento. `users` sube en los tres nodos después de cada registro. Todas las respuestas HTTP llevan las cabeceras `X-Auth-Id` y `X-Auth-Role`: así el cliente sabe a quién le habló.
+
+### 13.3 Protocolo de la mesh de auths
+
+Cada auth escucha a los demás por WebSocket en un **puerto aparte** (`--peer-port`, por defecto `puerto + 100`) y también en `/peer` del puerto HTTP (para usar un solo túnel de ngrok). La lista de nodos es fija (`--cluster`, la misma en los tres). **Inicia la conexión el de `authId` menor** (`auth-a` → `auth-b` y `auth-c`; `auth-b` → `auth-c`). Si llega un enlace duplicado se cierra (`4009`). Todos los mensajes llevan `term`.
+
+| Mensaje | Quién → quién | Para qué |
+| --- | --- | --- |
+| `hello {authId, role, term, publicUrl, peerUrl, lastSeq, lastTerm, auth}` | primer mensaje, ambos sentidos | Presentarse. `auth` es un JWT `{role:"auth"}` firmado con `JWT_SECRET`: un proceso cualquiera no puede unirse |
+| `heartbeat {authId, term, lastSeq}` | líder → réplicas, cada 2 s | "Sigo vivo y voy en `lastSeq`". La réplica atrasada pide sync |
+| `heartbeat_ack {authId, term, lastSeq}` | réplica → líder | El líder sabe quién lo oye (y si conserva la mayoría) |
+| `write_propagate {term, seq, op, data}` | líder → réplicas | Una escritura. `op`: `register`, `register_google`, `match_result` |
+| `write_ack {authId, seq}` | réplica → líder | "Ya apliqué hasta `seq`" (necesario para la opción B) |
+| `request_sync {fromSeq, lastTerm}` | réplica → líder | "Tengo hasta `fromSeq`; mándame lo que sigue" |
+| `sync_response {entries, reset, lastSeq}` | líder → réplica | Las entradas con `seq > fromSeq` (o todo el log con `reset:true`, ver 13.6) |
+| `election {candidate, term, lastSeq, lastTerm}` | candidato → todos | Pedir el voto |
+| `vote {voter, term, voteGranted}` | → candidato | Respuesta |
+| `new_leader {leader, term}` | ganador → todos | Anuncio |
+| `directory {coordinators}` | líder → réplicas, cada 2 s | Copia del directorio de coordinadores (estado blando) |
+
+Ejemplo de propagación de un registro:
+
+```json
+{ "type": "write_propagate", "term": 3, "seq": 143, "op": "register",
+  "data": { "userId": 28, "username": "alice", "provider": "local",
+            "password_hash": "$2b$10$…", "created_at": "2026-11-19T…" } }
+```
+
+**Todas las decisiones las toma el líder** (`userId = max(id) + 1`, hash, fecha) y van dentro de `data`. Las réplicas aplican la misma entrada con el mismo `userId`, así los JWT firmados por cualquier nodo llevan el mismo id. Cada nodo guarda su BD y el **log de replicación** (`replication_log`) en `auth-service/data/<id>.db`.
+
+### 13.4 Consistencia de escrituras: elegimos la opción B
+
+> **Propagar primero, responder después.** El líder escribe la entrada en su log, la propaga y **solo responde al cliente cuando la mayoría del clúster la tiene**: él más una réplica en un clúster de 3. Si en `WRITE_ACK_TIMEOUT_MS` (3 s) no llega el ACK, responde `503 replication_timeout`.
+
+Por qué:
+
+1. **Lo que se escribe aquí no se puede reconstruir.** A diferencia de las posiciones de los coordinadores, un usuario registrado es un hecho. Con la opción A, si el líder muere justo después de responder `201`, el usuario cree que tiene cuenta y el sistema no la tiene. Con B, un `201` significa que la cuenta está en al menos dos nodos y sobrevive a la caída de cualquiera.
+2. **Encaja con la elección.** Una réplica solo vota por un candidato cuyo log está al menos tan al día como el suyo (13.5). Toda escritura confirmada está en la mayoría y todo ganador necesita votos de la mayoría, así que **el nuevo líder siempre tiene todas las escrituras confirmadas**.
+3. **El costo es aceptable.** Las escrituras son raras (registrarse, terminar una partida) y en local el ACK tarda milisegundos. Esperar a *una* réplica, no a todas, evita que una réplica lenta o caída frene el sistema: con 2 de 3 vivos todo sigue funcionando.
+
+El riesgo que aceptamos: si caen **dos** auths, el que queda no consigue ACK y las escrituras fallan con `503` (y a los 6 s deja de ser líder, ver §12). Un `503 replication_timeout` significa "no confirmado": si la entrada sí llegó, el reintento responde `409 ya registrado`; si se perdió junto con un ex-líder aislado, se descarta en el siguiente sync.
+
+### 13.5 Elección de líder
+
+1. Una réplica que no recibe latido en 6 s declara muerto al líder. Espera un azar de 0–1,5 s (para que no se postulen todas a la vez), sube su `term`, vota por sí misma y manda `election`.
+2. Cada nodo da **un voto por term** (guardado en la BD) y solo si el log del candidato está al día: `(lastTerm, lastSeq)` del candidato ≥ el propio. Un nodo que todavía oye a un líder vivo no vota; así un nodo que vuelve no tumba al líder actual.
+3. Con **mayoría** (2 de 3) el candidato es líder: manda `new_leader` y empieza a latir. Si hay empate, reintenta a los ~2 s.
+4. Quien ve un `term` mayor que el suyo lo adopta; si era líder, se baja. Un líder que deja de ver a la mayoría durante 6 s también se baja.
+5. El nuevo líder parte del directorio de coordinadores que venía recibiendo, con el TTL reiniciado. Así los coordinadores no desaparecen ni se rebalancean mientras se reorientan hacia él.
+
+**Durante una elección (≈ 6–9 s desde la caída) ninguna escritura se acepta** y las réplicas responden `503 no_leader`. El cliente debe reintentar: el cliente web lo hace solo durante ~12 s y lo avisa en pantalla; los coordinadores reintentan el heartbeat cada segundo. `GET /coordinator` **sí** funciona durante la elección (directorio replicado), y los jugadores conectados no notan nada porque el coordinador valida el JWT sin el auth.
+
+### 13.6 Réplicas atrasadas, sync y nodos que vuelven
+
+- **Lecturas en réplicas atrasadas.** Usamos la recomendación del enunciado: si `leaderSeq − mySeq < 10` (`LAG_TOLERANCE`), la réplica responde; si está más atrás, `503 not_leader` y el cliente va al líder. Además, si una réplica **no encuentra** al usuario y está aunque sea 1 entrada atrás, **no** dice "credenciales inválidas": redirige al líder, porque ese usuario puede ser justo el que todavía no le llegó. Así se evita el falso negativo del enunciado sin mandar todas las lecturas al líder. Con la opción B el atraso normal es 0.
+- **Sync.** Una réplica pide `request_sync` cuando el `heartbeat` o un `write_propagate` le muestran un hueco. El líder responde con las entradas que le faltan.
+- **Divergencia.** Si una réplica trae entradas que el líder no tiene (por ejemplo, un ex-líder con una escritura que nadie confirmó), el `term` de su última entrada no coincide con el del líder. El líder lo detecta y responde con `reset: true` y el log completo; la réplica borra su BD y la reconstruye. Así todos convergen al log del líder.
+- **El auth muerto vuelve** como réplica (guarda su `term` en disco), recibe el `hello` del líder actual y lo sigue: no recupera el liderazgo. Si está atrasado, pide sync.
+
+### 13.7 Clientes y coordinadores
+
+- **Cliente web**: `AUTH_URLS` en `client/.env` (el servidor la entrega en `/js/config.js`). `public/js/lib/auth.js` prueba primero el último auth que respondió, o el líder conocido si es una escritura. Error de red o 5xx → siguiente; `503 not_leader` → repite contra `leaderUrl`; `503 no_leader` → espera 2 s y reintenta. La **insignia** de abajo a la izquierda muestra `Auth: auth-b (réplica)` y, al pasar el mouse, el líder y la lista completa.
+- **Coordinadores**: `--auth-urls` / `AUTH_URLS`, con la misma lógica (`coordinator/src/auth.js`). El heartbeat, `/leave` y el resultado de partidas van **al líder**; si cambia, la réplica que contesta les da la nueva `leaderUrl` y se reorientan. La lista de coordinadores la piden a cualquier auth. El panel muestra el auth que respondió y el líder actual.
+
+### 13.8 Datos heredados
+
+Los scripts `start:a|b|c` usan `--seed users.db`: un nodo que arranca **sin** BD copia `users.db` y convierte sus filas en entradas `term 0` del log, en un orden fijo. Como los tres copian el mismo archivo, generan el mismo log y empiezan sincronizados. `users.db` no se modifica. Para empezar de cero, borren `auth-service/data/`.
+
+---
+
+## 14. Tracks del examen final
 
 **Track principal: chat distribuido.** **Track secundario: modo espectador.** Se eligieron dos tracks porque el espectador comparte con el chat la misma infraestructura (el canal de la sala), y el chat sin el espectador no mostraría el caso "lector que no escribe".
 
-### 13.1 Chat distribuido (principal)
+### 14.1 Chat distribuido (principal)
 
 - **Canales**: `global` (plaza del lobby, visible desde todos los coordinadores) y `room:<id>` (chat de cada sala). El cliente no elige el canal: el servidor lo deduce de lo que está viendo, así que nadie puede escribir en una sala ajena.
 - **Flujo**: `chat_send` → el coordinador local valida, sella con su reloj, guarda en su historial, entrega a sus clientes y replica por la mesh con `chat_replicate`. Los pares **re-validan** (no confían en el otro coordinador), actualizan su reloj y entregan a los suyos. Nadie retransmite lo recibido, así que no hay bucles. Al enlazarse dos coordinadores se intercambian los historiales (`chat_sync`); los duplicados se descartan por id `origin#seq`.
@@ -340,7 +519,7 @@ También se corrió una prueba de punta a punta (auth + 2 coordinadores + client
 - **Sonido**: cada mensaje recibido y enviado suena con el instrumento de la temática (`chatIn`, `chatOut`), con un intervalo mínimo para que una ráfaga no sature.
 - **Límites conocidos**: el historial es solo en memoria (si caen todos los coordinadores se pierde). El orden es consistencia eventual: un mensaje con retraso de red puede aparecer insertado más arriba. Un mensaje enviado justo cuando se corta el enlace con un par puede no llegar a ese par hasta el siguiente `chat_sync`.
 
-### 13.2 Modo espectador (secundario)
+### 14.2 Modo espectador (secundario)
 
 - **Entrada pública**: `spectate.html` (enlace en el login y en el lobby) lista las salas con `GET <coordinador>/rooms` (público) y abre `game.html?sala=…&espectador=1`. El WS es `/connect?view=board&room=<id>&spectator=1` **sin token**.
 - **Qué recibe**: `welcome`, la configuración, `game_state` en cada cambio y el chat de la sala. La pantalla es la del tablero con una insignia y una franja **MODO ESPECTADOR**, sin controles de jugador (intercambios, propiedades, elegir ficha).
@@ -354,7 +533,7 @@ También se corrió una prueba de punta a punta (auth + 2 coordinadores + client
 
   No se hizo un coordinador exclusivo de espectadores porque complicaría la mesh sin ganar nada con este volumen. Atajo documentado: el contador de espectadores anónimos solo lo conoce el anfitrión de la sala.
 
-### 13.3 Subasta de bienes en bancarrota
+### 14.3 Subasta de bienes en bancarrota
 
 Cuando un jugador queda en bancarrota (deuda, rendición, tiempo agotado o desconexión de más de 30 s) y siguen quedando **al menos 2 jugadores**, sus propiedades se **subastan una por una**; el dinero y las cartas de salida pasan al acreedor, como antes. Si la partida termina con esa baja, no hay subasta.
 
@@ -363,7 +542,7 @@ Cuando un jugador queda en bancarrota (deuda, rendición, tiempo agotado o desco
 - Es **autoritativa y replicada**: el estado de la subasta va dentro del estado de la sala. El reloj lo corre el anfitrión y, si cae, el nuevo anfitrión lo reprograma al adoptar la sala.
 - Durante la subasta el reloj del turno queda en pausa y el resto de acciones se bloquea; al terminar, el turno se reanuda con el tiempo completo.
 
-### 13.4 Cómo demostrarlo
+### 14.4 Cómo demostrarlo
 
 ```bash
 cd coordinator && npm test      # 34 pruebas: motor, subastas y núcleo del chat

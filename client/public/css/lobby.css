@@ -177,7 +177,7 @@ canvas#game-canvas {
 }
 .stat .v { font-family: var(--font-head); font-size: 1.6rem; font-weight: 700; color: var(--gold-2); font-variant-numeric: tabular-nums; }
 .stat .l { font-size: 0.82rem; color: var(--text-muted); }
-@media (max-width: 720px) { .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.stat .v { font-size: 1.35rem; }
 
 .collection {
   display: grid;
@@ -203,7 +203,7 @@ canvas#game-canvas {
   grid-template-columns: 3.8rem minmax(0, 1fr);
   gap: 0.7rem;
   align-items: center;
-  height: 6.1rem;
+  min-height: 6.6rem;
   padding: 0.45rem 0;
   border-top: 1px solid var(--border-soft);
 }
@@ -243,3 +243,22 @@ canvas#game-canvas {
 .room-host { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; font-size: 0.82rem; color: var(--text-muted); }
 .room-host .switch-note { color: #f6d39a; }
 .rooms-empty { grid-column: 1 / -1; padding: 1.4rem; text-align: center; color: var(--text-muted); border: 1px dashed var(--border); border-radius: var(--radius); }
+
+/* Grupo en liberación (un grupo a la vez) */
+.unlock-banner { margin: 0 0 1rem; padding: 0.6rem 0.85rem; border-radius: 10px; background: rgba(217, 180, 90, 0.08); border: 1px solid rgba(217, 180, 90, 0.4); font-size: 0.9rem; }
+.unlock-banner:empty { display: none; }
+.theme-col.unlocking { box-shadow: 0 0 0 2px var(--wc), 0 0 24px -6px var(--wc); }
+.unlock-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+.unlock-row .btn { width: auto; }
+.unlock-active { font-weight: 700; color: var(--wc); font-size: 0.85rem; padding: 0.25rem 0.6rem; border-radius: 999px; border: 1px solid var(--wc); }
+.col-sub { margin-top: 0.7rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); }
+.skin-row.next { background: color-mix(in srgb, var(--wc) 8%, transparent); border-radius: 8px; padding-left: 0.35rem; }
+.skin-row .die { margin: 0 0.35rem; }
+
+/* Iconos SVG en lugar de emojis */
+.room-emblem { display: inline-grid; place-items: center; line-height: 0; }
+.room-emblem .ic { width: 1.6rem; height: 1.6rem; color: var(--rc, var(--gold-2)); stroke-width: 1.7; }
+.host-ic { width: 0.95em; height: 0.95em; margin-left: 0.25rem; color: var(--gold-2); }
+.sk-name .ic { width: 0.95em; height: 0.95em; margin-right: 0.25rem; color: var(--text-muted); }
+.unlock-active .ic, #unlock-banner .ic { color: var(--gold-2); }
+.player-info .ic { width: 1rem; height: 1rem; color: var(--text-muted); }

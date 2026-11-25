@@ -9,5 +9,9 @@ codigoBase/
 SSD_TALLER_4.md
 SSD_TALLER_6.md
 contexto/
+SSD_TALLER_7.md
+auth-service/data/
+
+client/.auth-peers.json
 
 docs/
