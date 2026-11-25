@@ -71,6 +71,13 @@ const SERVICE_MULTIPLIERS = [4, 10];        // renta = dados × multiplicador (1
 // Lo donado va al Fondo de Donaciones; quien cae en "Descanso" se lo lleva.
 const DONATION_AMOUNTS = [50, 75, 100, 150]; // una por lado del tablero (más cara al avanzar)
 
+// ── Subastas (cuando un jugador queda en bancarrota) ─────────────────────────
+// Sus propiedades se subastan una por una entre los jugadores que siguen en pie.
+const AUCTION_MIN_BID  = 10;      // oferta mínima de apertura
+const AUCTION_STEP     = 10;      // cada oferta debe superar a la anterior al menos en esto
+const AUCTION_OPEN_MS  = Number(process.env.AUCTION_OPEN_MS || 20000);  // tiempo para la primera oferta
+const AUCTION_BID_MS   = Number(process.env.AUCTION_BID_MS  || 10000);  // tiempo tras cada oferta nueva
+
 // ── Límites ───────────────────────────────────────────────────────────────────
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 6;
@@ -95,6 +102,10 @@ module.exports = {
   SERVICE_PRICE,
   SERVICE_MULTIPLIERS,
   DONATION_AMOUNTS,
+  AUCTION_MIN_BID,
+  AUCTION_STEP,
+  AUCTION_OPEN_MS,
+  AUCTION_BID_MS,
   MIN_PLAYERS,
   MAX_PLAYERS
 };

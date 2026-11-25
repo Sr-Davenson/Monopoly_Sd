@@ -94,7 +94,8 @@
 .theme-card[aria-pressed="true"] { border-color: var(--member-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--member-color) 30%, transparent); }
 .theme-card .theme-member { font-size: 0.74rem; color: var(--member-color); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
 .theme-card strong { font-family: var(--font-head); font-size: 1rem; }
-.theme-card .theme-tokens { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.2rem; }
+.theme-card .theme-tokens { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: auto; padding-top: 0.3rem; }
+.theme-card > .small.text-muted { min-height: 4.2em; }   /* descripciones de 3 líneas: todas las tarjetas igual de altas */
 
 .skins-title { font-family: var(--font-head); color: var(--gold-2); font-size: 1rem; }
 .skin-grid {
@@ -120,8 +121,9 @@
 .skin-option:hover:not(:disabled) { border-color: var(--gold); }
 .skin-option[aria-pressed="true"] { border-color: var(--gold-2); box-shadow: 0 0 0 3px rgba(217, 180, 90, 0.25); }
 .skin-option:disabled { cursor: not-allowed; }
-.skin-option .sname { font-weight: 700; font-size: 0.88rem; }
-.skin-option .smission { font-size: 0.76rem; color: var(--text-muted); }
+.skin-option { justify-content: flex-start; }
+.skin-option .sname { font-weight: 700; font-size: 0.88rem; min-height: 2.4em; display: flex; align-items: center; justify-content: center; line-height: 1.2; }
+.skin-option .smission { font-size: 0.76rem; color: var(--text-muted); min-height: 3.4em; line-height: 1.25; }
 .skin-option:disabled .sname { color: var(--text-muted); }
 
 .waiting-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
@@ -217,20 +219,82 @@
 }
 .space .sicon { font-size: 1.35em; line-height: 1; flex: none; }
 .space .price { color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 0.92em; flex: none; }
+/* Esquinas: icono grande + nombre + qué hacen. La franja del borde exterior
+   (30 % de alto) queda libre para las fichas, igual que en las demás casillas. */
+.space.corner {
+  --corner-color: var(--gold);
+  border: 2px solid color-mix(in srgb, var(--corner-color) 55%, #2a2433);
+  background: radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--corner-color) 22%, #1d1826), #120f18 78%);
+}
+#space-0  { --corner-color: #4fbf8b; }   /* Salida */
+#space-10 { --corner-color: #8f98a8; }   /* Calabozo */
+#space-20 { --corner-color: #e8a33d; }   /* Taberna */
+#space-30 { --corner-color: #e05a47; }   /* Ve al calabozo */
 .space.corner .sbody {
   justify-content: center;
-  gap: 4px;
+  align-items: center;
+  gap: 0.2em;
+  padding: 7% 8%;
   font-family: var(--font-head);
   font-weight: 700;
-  font-size: clamp(8px, 10cqmin, 15px);
-  background: radial-gradient(circle, #2a2333, #17131e);
+  font-size: clamp(9px, 11.5cqmin, 17px);
   color: var(--gold-2);
-  padding: 0.5em;
+  text-align: center;
 }
-.space.corner .name { color: var(--gold-2); }
-.space.corner .sicon { font-size: 2.1em; }
-#space-0 .sbody, #space-10 .sbody { padding-bottom: 35%; }
-#space-20 .sbody, #space-30 .sbody { padding-top: 35%; }
+.space.corner .sicon {
+  font-size: 2.5em;
+  line-height: 1;
+  color: var(--corner-color);
+  filter: drop-shadow(0 0 0.35em color-mix(in srgb, var(--corner-color) 70%, transparent));
+}
+.space.corner .name {
+  color: var(--text);
+  line-height: 1.1;
+  text-wrap: balance;
+  letter-spacing: 0.02em;
+  hyphens: none;
+}
+.space.corner .corner-sub {
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 0.78em;
+  line-height: 1.1;
+  color: var(--corner-color);
+  letter-spacing: 0.02em;
+}
+/* El borde inferior (casillas 0 y 10) o superior (20 y 30) se reserva a las fichas */
+#space-0 .sbody, #space-10 .sbody { bottom: 30%; padding-bottom: 2%; }
+#space-20 .sbody, #space-30 .sbody { top: 30%; padding-top: 2%; }
+@container (max-height: 100px) { .space.corner .corner-sub { display: none; } }
+
+/* ── Tarjetas (General y Especial) en el tablero ─────────────────────────── */
+.space.is-card {
+  --card: var(--gold);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--card) 30%, #1b1520), #17131e 75%);
+  border-color: color-mix(in srgb, var(--card) 65%, #2a2433);
+}
+.space.card-general { --card: #e0b25a; }
+.space.card-special { --card: #b48cff; }
+.space.is-card .sbody { justify-content: center; gap: 0.25em; }
+.space.is-card .sicon { font-size: 2.1em; color: var(--card); filter: drop-shadow(0 0 0.4em color-mix(in srgb, var(--card) 80%, transparent)); }
+.space.is-card .name {
+  color: var(--card);
+  font-family: var(--font-head);
+  font-size: 0.82em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  hyphens: none;
+}
+.space.is-card .card-sub { font-size: 0.7em; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+.space.card-special::before {   /* destello periódico: la Especial se distingue a simple vista */
+  content: '';
+  position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background: linear-gradient(115deg, transparent 35%, rgba(255, 255, 255, 0.16) 50%, transparent 65%);
+  transform: translateX(-120%);
+  animation: card-shine 5s ease-in-out infinite;
+}
+@keyframes card-shine { 0%, 70% { transform: translateX(-120%); } 100% { transform: translateX(120%); } }
+@media (prefers-reduced-motion: reduce) { .space.card-special::before { animation: none; } }
 .space.owned { box-shadow: inset 0 0 0 3px var(--owner-color); }
 .space.mortgaged::after {
   content: 'HIPOTECADA';
@@ -345,18 +409,35 @@
 .actions .btn { width: auto; }
 .pot { font-size: 0.88rem; color: var(--gold-2); text-align: center; }
 .last-card {
-  max-width: 22rem;
-  padding: 0.8rem 1rem;
-  border-radius: 10px;
+  --card: #e0b25a;
+  position: relative;
+  width: min(24rem, 100%);
+  padding: 0.85rem 1.1rem 0.9rem;
+  border-radius: 12px;
   background: linear-gradient(180deg, #fbf5e6, #eadcb8);
   color: #2a1e10;
   text-align: center;
-  font-size: 0.88rem;
-  box-shadow: 0 8px 18px rgba(0,0,0,.45);
-  border: 1px solid #b8995a;
+  font-size: 0.92rem;
+  box-shadow: 0 10px 22px rgba(0,0,0,.5);
+  border: 2px solid var(--card);
 }
-.last-card .card-deck { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #7a6542; }
-.last-card .card-title { font-family: var(--font-head); font-weight: 700; margin: 0.15rem 0; }
+.last-card.special {
+  --card: #8b5cf6;
+  background: linear-gradient(180deg, #f1eaff, #d9cbf7);
+  box-shadow: 0 10px 26px rgba(139, 92, 246, 0.45);
+}
+.last-card.reveal { animation: card-reveal 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+@keyframes card-reveal { from { opacity: 0; transform: translateY(14px) rotateX(70deg) scale(0.9); } }
+.last-card .card-icon {
+  position: absolute; top: -0.9rem; left: 50%; transform: translateX(-50%);
+  width: 1.9rem; height: 1.9rem; display: grid; place-items: center;
+  border-radius: 50%; background: var(--card); color: #fff; font-size: 1rem;
+  box-shadow: 0 2px 6px rgba(0,0,0,.4);
+}
+.last-card .card-deck { margin-top: 0.3rem; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: color-mix(in srgb, var(--card) 70%, #2a1e10); }
+.last-card .card-title { font-family: var(--font-head); font-weight: 700; font-size: 1.05rem; margin: 0.15rem 0; }
+.last-card .card-text { line-height: 1.3; }
+@media (prefers-reduced-motion: reduce) { .last-card.reveal { animation: none; } }
 
 /* Panel lateral */
 .side-panel { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
@@ -689,3 +770,46 @@
   .confetti, .achievement-glow { display: none; }
   .end-token .token-art, .turn-timer[data-level="danger"] .turn-timer-text { animation: none; }
 }
+
+/* ── Subasta de bienes en bancarrota ───────────────────────────────────────── */
+.auction {
+  width: min(26rem, 100%);
+  display: flex; flex-direction: column; align-items: center; gap: 0.35rem;
+  padding: 0.8rem 1rem;
+  border-radius: 14px;
+  text-align: center;
+  background: radial-gradient(circle at 50% 0%, rgba(232, 163, 61, 0.2), #1c1824 70%);
+  border: 2px solid var(--warning);
+  box-shadow: 0 0 26px -6px rgba(232, 163, 61, 0.6);
+  animation: card-reveal 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+.auction[hidden] { display: none; }
+.auction-kicker { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--warning); }
+.auction-count { color: var(--text-muted); }
+.auction-item { font-family: var(--font-head); font-weight: 900; font-size: 1.15rem; color: var(--text); line-height: 1.15; }
+.auction-sub { font-size: 0.78rem; color: var(--text-muted); }
+.auction-bid { font-size: 1rem; color: var(--text); }
+.auction-bid strong { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.auction-clock { font-family: var(--font-head); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--gold-2); }
+.auction-clock[data-level="danger"] { color: #ff8a78; animation: pulse 1s ease-in-out infinite; }
+.auction-controls { display: flex; flex-direction: column; gap: 0.4rem; align-items: center; width: 100%; }
+.auction-quick, .auction-custom { display: flex; flex-wrap: wrap; gap: 0.35rem; justify-content: center; }
+.auction-controls .btn { width: auto; }
+.auction-input {
+  width: 6.5rem; padding: 0.35rem 0.5rem; border-radius: 8px;
+  border: 1px solid var(--border); background: #0f0c14; color: var(--text); font: inherit; text-align: center;
+}
+.space.auctioning { outline: 3px solid var(--warning); outline-offset: -3px; z-index: 2; animation: auction-glow 1.2s ease-in-out infinite; }
+@keyframes auction-glow { 50% { box-shadow: 0 0 18px 2px rgba(232, 163, 61, 0.8) inset; } }
+@media (prefers-reduced-motion: reduce) { .auction, .space.auctioning, .auction-clock[data-level="danger"] { animation: none; } }
+
+/* ── Modo espectador: sin controles de jugador ─────────────────────────────── */
+body.is-spectator .only-player,
+body.is-spectator #theme-grid,
+body.is-spectator #skins-title,
+body.is-spectator #skin-grid,
+body.is-spectator .waiting-actions,
+body.is-spectator #me-token,
+body.is-spectator #me-money,
+body.is-spectator #trade-window { display: none !important; }
+body.is-spectator .waiting-room .text-muted.small { display: none; }

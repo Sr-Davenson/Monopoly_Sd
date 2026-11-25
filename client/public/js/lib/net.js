@@ -18,13 +18,16 @@
 // entró o salió un coordinador. El cliente se cambia a ese coordinador.
 //
 // Los cierres 4001 (token inválido), 4002 (sesión duplicada), 4003 (token
-// manipulado) y 4004 (sala inválida) son definitivos: no se reintenta.
+// manipulado), 4004 (sala inválida), 4008 (inundación de mensajes) y 4013
+// (tope de espectadores) son definitivos: no se reintenta.
+//
+// Sin `token` la conexión es de ESPECTADOR (solo lectura, sin login).
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
   const cfg = window.APP_CONFIG || {};
   const AUTH_URL = (cfg.AUTH_URL || 'http://localhost:4000').replace(/\/+$/, '');
   const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
-  const FATAL_CODES = new Set([4001, 4002, 4003, 4004]);
+  const FATAL_CODES = new Set([4001, 4002, 4003, 4004, 4008, 4013]);
   // 4010 → la sala vive en otro coordinador · 4011 → rebalanceo de carga
   const REDIRECT = { 4010: /^host:(.+)$/, 4011: /^move:(.+)$/ };
 
@@ -89,7 +92,8 @@
       console.log(`[NET] GET /coordinator${prefer ? ` (prefer ${prefer})` : ''} → ${info.coordinatorId} (${info.publicUrl})`);
       status('connecting', `Conectando a ${info.coordinatorId}…`);
 
-      const qs = new URLSearchParams({ ...(opts.params || {}), token: opts.token });
+      // Sin token = espectador anónimo (solo lectura); el servidor lo distingue por spectator=1
+      const qs = new URLSearchParams({ ...(opts.params || {}), ...(opts.token ? { token: opts.token } : { spectator: '1' }) });
       let opened = false;
       try {
         ws = new WebSocket(`${info.publicUrl.replace(/\/+$/, '')}/connect?${qs}`);
@@ -183,7 +187,9 @@
     4001: 'Sesión terminada: token inválido o expirado. Vuelve a iniciar sesión.',
     4002: 'Tu sesión se abrió en otra pestaña o dispositivo.',
     4003: 'Sesión cerrada: se detectó una modificación no autorizada del token de sesión.',
-    4004: 'Esa sala no existe.'
+    4004: 'Esa sala no existe.',
+    4008: 'Te desconectamos por enviar demasiados mensajes por segundo.',
+    4013: 'Este coordinador ya tiene el máximo de espectadores. Intenta de nuevo en un momento.'
   };
 
   window.Net = { AUTH_URL, requestCoordinator, fetchProgress, connectCoordinator, goToLogin, FATAL_MESSAGES };

@@ -13,6 +13,8 @@ const PARAMS          = new URLSearchParams(location.search);
 const ROOM_ID         = PARAMS.get('sala');
 // Coordinador anfitrión de la sala: el cliente se cambia a él al entrar.
 const ROOM_HOST       = PARAMS.get('coord');
+// Modo espectador: ?espectador=1. Se conecta SIN token (anónimo, solo lectura).
+const SPECTATOR       = PARAMS.get('espectador') === '1';
 
 let conn = null;            // conexión con el coordinador (net.js)
 let config = null;          // tablero, temáticas, economía (estático)
@@ -41,16 +43,17 @@ function money(n) {
 }
 
 let toastTimer = null;
-function toast(text, kind = 'error') {
+function toast(text, kind = 'error', ms = 3500) {
   const t = $('toast');
   t.textContent = text;
   t.className = `toast ${kind === 'info' ? 'info' : ''}`;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 3500);
+  toastTimer = setTimeout(() => { t.hidden = true; }, ms);
 }
 
 function act(action, data = {}) {
+  if (SPECTATOR) return toast('Modo espectador: no puedes jugar.');
   if (!conn || !conn.send({ type: 'game_action', data: { action, ...data } })) {
     toast('Sin conexión con el coordinador');
   }
@@ -88,7 +91,7 @@ function isUnlocked(skin) {
 }
 
 // ── Consultas sobre el estado ────────────────────────────────────────────────
-const me = () => state && state.players.find(p => p.id === myId);
+const me = () => state && myId && state.players.find(p => p.id === myId);
 const playerById = (id) => state.players.find(p => p.id === id);
 const memberById = (id) => config.members.find(m => m.id === id);
 const isMyTurn = () => state && state.phase === 'playing' && state.turn && state.turn.playerId === myId;
@@ -122,6 +125,16 @@ const SPACE_ICONS = {
   start: '⚑', jail: '⛓', rest: '🍺', go_to_jail: '⚔',
   card_general: '📜', card_special: '✶', donation: '♥', transport: '⇄', service: '⚡'
 };
+
+// Qué hace cada esquina (se muestra bajo su nombre en el tablero)
+const CORNER_SUB = {
+  start: (cfg) => `Cobra ${money(cfg.economy.salary)}`,
+  jail: () => 'De visita / preso',
+  rest: () => 'Cobra el Fondo',
+  go_to_jail: () => 'Directo al calabozo'
+};
+// Etiqueta corta de las tarjetas en el tablero
+const CARD_SUB = { card_general: 'Mazo General', card_special: 'Mazo Especial' };
 
 const TYPE_LABELS = {
   start: 'Esquina', jail: 'Esquina', rest: 'Esquina', go_to_jail: 'Esquina',
@@ -172,6 +185,10 @@ function renderBoard() {
     cell.classList.toggle('owned', !!owner);
     cell.classList.toggle('mortgaged', !!(prop && prop.mortgaged));
     cell.classList.toggle('selected', selectedSpace === s.id);
+    cell.classList.toggle('auctioning', !!(state.auction && state.auction.current === s.id));
+    cell.classList.toggle('is-card', s.type === 'card_general' || s.type === 'card_special');
+    cell.classList.toggle('card-general', s.type === 'card_general');
+    cell.classList.toggle('card-special', s.type === 'card_special');
     if (owner) cell.style.setProperty('--owner-color', owner.color);
 
     const parts = [];
@@ -182,6 +199,8 @@ function renderBoard() {
       parts.push(el('div', { class: 'sicon', 'aria-hidden': 'true' }, s.icon || SPACE_ICONS[s.type] || ''));
     }
     parts.push(el('div', { class: 'name' }, s.name));
+    if (corner && CORNER_SUB[s.type]) parts.push(el('div', { class: 'corner-sub' }, CORNER_SUB[s.type](config)));
+    if (CARD_SUB[s.type]) parts.push(el('div', { class: 'card-sub' }, CARD_SUB[s.type]));
 
     if (prop && prop.level > 0) {
       const b = el('div', { class: 'buildings' });
@@ -430,8 +449,16 @@ function renderCenter() {
   }
 
   const mine = me();
+  if (state.auction) {
+    actions.append(el('span', { class: 'text-muted small' }, 'Subasta en curso: el turno se reanuda al terminar.'));
+    if (mine && !mine.bankrupt) {
+      actions.append(confirmButton('Rendirse', '¿Seguro? Confirmar rendición', 'btn btn-ghost btn-small', () => act('forfeit')));
+    }
+    renderPot();
+    return;
+  }
   if (!mine) {
-    actions.append(el('span', { class: 'text-muted small' }, 'Partida en curso: estás como espectador.'));
+    actions.append(el('span', { class: 'text-muted small' }, SPECTATOR ? '👁 Estás observando la partida.' : 'Partida en curso: estás como espectador.'));
   } else if (isMyTurn()) {
     const e = config.economy;
     if (t.stage === 'roll') {
@@ -477,14 +504,20 @@ function renderPot() {
   const box = $('last-card');
   if (!c) { box.hidden = true; return; }
   const who = playerById(c.playerId);
+  const special = c.deck === 'special';
   box.hidden = false;
+  box.className = `last-card ${special ? 'special' : 'general'}`;
   box.replaceChildren(
-    el('div', { class: 'card-deck' }, `Tarjeta ${c.deck === 'general' ? 'General' : 'Especial'} · ${who ? who.username : ''}`),
+    el('div', { class: 'card-icon', 'aria-hidden': 'true' }, special ? '✶' : '📜'),
+    el('div', { class: 'card-deck' }, `Tarjeta ${special ? 'Especial' : 'General'} · ${who ? who.username : ''}`),
     el('div', { class: 'card-title' }, c.title),
-    el('div', {}, c.text)
+    el('div', { class: 'card-text' }, c.text)
   );
   if (c.seq !== lastCardSeq) {
-    if (lastCardSeq !== 0) toast(`${who ? who.username : ''}: ${c.text}`, 'info');
+    if (lastCardSeq !== 0) {
+      box.classList.add('reveal');
+      toast(`${special ? '✶ Especial' : '📜 General'} · ${who ? who.username : ''}: ${c.text}`, 'info', 6000);
+    }
     lastCardSeq = c.seq;
   }
 }
@@ -817,6 +850,9 @@ let seenLog = null;   // claves de las entradas del registro ya procesadas
 let clockOffset = 0;  // serverNow - Date.now() (para las cuentas regresivas)
 
 const LOG_SOUNDS = [
+  [/^🔨 Subasta de /, 'auction'],
+  [/ ofrece \d+ por /, 'bid'],
+  [/^🔨 ¡Vendida! /, 'sold'],
   [/ compró /, 'buy'],
   [/ construyó /, 'build'],
   [/ de renta a | pagó su deuda| paga la multa| pagó .* sale del calabozo/, 'pay'],
@@ -884,7 +920,8 @@ function fmtClock(ms) {
 function updateTimers() {
   if (!state || !config) return;
   const box = $('turn-timer');
-  const t = state.phase === 'playing' ? state.turn : null;
+  const t = state.phase === 'playing' && !state.auction ? state.turn : null;
+  updateAuctionClock();
   if (!t || !t.deadline) {
     box.hidden = true;
   } else {
@@ -994,7 +1031,7 @@ function renderEndModal() {
     try { sessionStorage.setItem('end_dismissed', key); } catch { /* sin storage */ }
   };
   const actions = [
-    el('a', { class: 'btn btn-ghost', href: 'lobby.html' }, 'Volver al lobby'),
+    el('a', { class: 'btn btn-ghost', href: SPECTATOR ? 'spectate.html' : 'lobby.html' }, SPECTATOR ? 'Ver otras partidas' : 'Volver al lobby'),
     el('button', { class: 'btn btn-secondary', type: 'button', onclick: close }, 'Ver tablero')
   ];
   if (state.hostId === myId) actions.push(el('button', { class: 'btn btn-success', type: 'button', onclick: () => { close(); act('restart'); } }, 'Nueva partida'));
@@ -1109,6 +1146,7 @@ function render() {
   renderPlayers();
   if (lobby) return renderWaitingRoom();
   renderBoard();
+  renderAuction();
   renderCenter();
   renderSpaceDetail();
   renderMyProps();
@@ -1124,10 +1162,114 @@ $('leave-btn').addEventListener('click', () => { selectedTheme = null; selectedS
 $('start-btn').addEventListener('click', () => act('start'));
 
 // ── Conexión (Taller 6: GET /coordinator → WS; reconexión a otro coordinador) ─
-$('me-name').textContent = currentUsername;
+$('me-name').textContent = SPECTATOR ? 'Espectador' : currentUsername;
 $('room-name').textContent = ROOM_ID;
+if (SPECTATOR) {
+  document.body.classList.add('is-spectator');
+  $('spectator-badge').hidden = false;
+  $('spectator-banner').hidden = false;
+  $('back-link').href = 'spectate.html';
+  $('back-link').textContent = '← Otras partidas';
+  document.querySelector('.game-title').href = 'spectate.html';
+}
+
+// ── Chat de la sala ──────────────────────────────────────────────────────────
+// Los espectadores leen pero no escriben (el servidor ignora su chat_send).
+const chat = Chat.create($('chat-panel'), {
+  title: '💬 Chat de la sala',
+  myId: () => myId,
+  canSend: !SPECTATOR,
+  collapsible: true,
+  readOnlyNote: '👁 Eres espectador: puedes leer el chat, pero no escribir.',
+  send: (text) => !!conn && conn.send({ type: 'chat_send', data: { text } }),
+  themeOf: (m) => {
+    if (!state) return null;
+    const p = m ? state.players.find(x => x.id === String(m.userId)) : me();
+    return p ? p.themeId : null;
+  }
+});
+
+// ── Subasta de los bienes de un jugador en bancarrota ────────────────────────
+let auctionDraft = '';
+
+function updateAuctionClock() {
+  const a = state && state.phase === 'playing' ? state.auction : null;
+  const clock = $('auction-clock');
+  if (!a || !clock) return;
+  const left = a.deadline - serverNow();
+  clock.textContent = `${fmtClock(left)} para cerrar`;
+  clock.dataset.level = left <= 5000 ? 'danger' : 'ok';
+}
+
+function renderAuction() {
+  const box = $('auction');
+  const a = state.phase === 'playing' ? state.auction : null;
+  if (!a || a.current === null) { box.hidden = true; box.replaceChildren(); return; }
+
+  const s = config.spaces[a.current];
+  const leader = a.bidderId ? playerById(a.bidderId) : null;
+  const mine = me();
+  const iLead = !!mine && a.bidderId === myId;
+  const iPassed = !!mine && a.passed.includes(myId);
+  const canBid = !!mine && !mine.bankrupt && mine.connected && !iLead && !iPassed && mine.money >= a.minBid;
+
+  const wasFocused = box.contains(document.activeElement) && document.activeElement.tagName === 'INPUT';
+  const base = a.bidderId ? a.bid : 0;
+  const quick = [a.minBid, base + 50, base + 100, base + 200]
+    .filter((v, i, arr) => arr.indexOf(v) === i && v >= a.minBid && (!mine || v <= mine.money));
+
+  const controls = [];
+  if (!mine) {
+    controls.push(el('span', { class: 'small text-muted' }, '👁 Solo los jugadores pueden ofertar.'));
+  } else if (mine.bankrupt) {
+    controls.push(el('span', { class: 'small text-muted' }, 'Estás fuera de la partida.'));
+  } else if (iLead) {
+    controls.push(el('span', { class: 'small', style: 'color:#9fe3c2' }, '✔ Tienes la mejor oferta. Espera a que cierre.'));
+  } else if (iPassed) {
+    controls.push(el('span', { class: 'small text-muted' }, 'Pasaste en esta propiedad.'));
+  } else if (!canBid) {
+    controls.push(el('span', { class: 'small text-muted' }, `No te alcanza para la oferta mínima (${money(a.minBid)}).`));
+    controls.push(el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => act('auction_pass') }, 'Pasar'));
+  } else {
+    const input = el('input', {
+      class: 'auction-input', type: 'number', min: a.minBid, max: mine.money, step: 10,
+      placeholder: String(a.minBid), value: auctionDraft, 'aria-label': 'Tu oferta',
+      oninput: (ev) => { auctionDraft = ev.target.value; },
+      onkeydown: (ev) => { if (ev.key === 'Enter') bidFrom(input); }
+    });
+    const bidFrom = (inp) => {
+      const v = Math.floor(Number(inp.value));
+      if (!Number.isFinite(v) || v < a.minBid) return toast(`La oferta mínima es ${money(a.minBid)}`);
+      auctionDraft = '';
+      act('auction_bid', { amount: v });
+    };
+    controls.push(
+      el('div', { class: 'auction-quick' }, quick.map(v =>
+        el('button', { class: 'btn btn-small', type: 'button', onclick: () => { auctionDraft = ''; act('auction_bid', { amount: v }); } }, money(v)))),
+      el('div', { class: 'auction-custom' }, input,
+        el('button', { class: 'btn btn-success btn-small', type: 'button', onclick: () => bidFrom(input) }, 'Ofertar'),
+        el('button', { class: 'btn btn-ghost btn-small', type: 'button', onclick: () => act('auction_pass') }, 'Pasar'))
+    );
+  }
+
+  box.hidden = false;
+  box.replaceChildren(
+    el('div', { class: 'auction-kicker' }, `🔨 Subasta · bienes de ${a.fromName}`,
+      a.total > 1 ? el('span', { class: 'auction-count' }, ` · ${a.total - a.remaining} de ${a.total}`) : ''),
+    el('div', { class: 'auction-item' }, s.icon ? `${s.icon} ` : '', s.name),
+    el('div', { class: 'auction-sub' }, `Valor de lista ${money(s.price)} · se adjudica al mejor postor`),
+    el('div', { class: 'auction-bid' }, leader
+      ? ['Mejor oferta: ', el('strong', { style: `color:${leader.color}` }, money(a.bid)), ` de ${leader.username}`]
+      : ['Sin ofertas · mínima ', el('strong', {}, money(a.minBid))]),
+    el('div', { class: 'auction-clock', id: 'auction-clock' }),
+    el('div', { class: 'auction-controls' }, controls)
+  );
+  updateAuctionClock();
+  if (wasFocused) { const i = box.querySelector('input'); if (i) i.focus(); }
+}
 
 async function loadProgress() {
+  if (SPECTATOR) return;
   try { progress = await Net.fetchProgress(originalToken); } catch { progress = null; }
   checkAchievements();
   render();
@@ -1136,7 +1278,7 @@ async function loadProgress() {
 function onMessage(msg) {
   switch (msg.type) {
     case 'welcome':
-      myId = String(msg.you.userId);
+      myId = msg.you.userId == null ? null : String(msg.you.userId);
       if (msg.coordinator) $('coord-id').textContent = msg.coordinator.coordinatorId;
       break;
     case 'game_config':
@@ -1168,6 +1310,18 @@ function onMessage(msg) {
     case 'game_error':
       toast(msg.data.message);
       break;
+    case 'spectator_readonly':
+      toast(msg.data.message, 'info');
+      break;
+    case 'chat_history':
+      chat.setHistory(msg.data.messages, msg.data);
+      break;
+    case 'chat_message':
+      chat.add(msg.data.msg, msg.data.late);
+      break;
+    case 'chat_error':
+      chat.error(msg.data);
+      break;
     case 'progress_changed':
       loadProgress();
       break;
@@ -1179,7 +1333,7 @@ function onMessage(msg) {
 
 function connect() {
   conn = Net.connectCoordinator({
-    token: originalToken,
+    token: SPECTATOR ? null : originalToken,
     params: { view: 'board', room: ROOM_ID },
     prefer: ROOM_HOST,
     onStatus(stateName, text, info) {
@@ -1206,11 +1360,20 @@ function connect() {
     onMessage,
     onFatal(code) {
       if (leaving) return;
+      if (SPECTATOR) {   // el espectador no tiene sesión: nunca se le manda al login
+        leaving = true;
+        if (code === 4004) { window.location.replace('spectate.html'); return; }
+        const b = $('lost-banner');
+        b.hidden = false;
+        b.textContent = Net.FATAL_MESSAGES[code] || 'Se cerró la conexión de espectador.';
+        return;
+      }
       if (code === 4004) { leaving = true; window.location.replace('lobby.html'); return; }
       Net.goToLogin(Net.FATAL_MESSAGES[code] || 'La sesión terminó.', code === 4002);
     }
   });
 
+  if (SPECTATOR) return;
   // Detección local de manipulación del token
   const poll = setInterval(() => {
     if (localStorage.getItem('token') !== originalToken) {
@@ -1225,10 +1388,10 @@ function connect() {
 // Al volver al lobby se cierra la conexión sin intentar reconectar
 window.addEventListener('pagehide', () => { leaving = true; if (conn) conn.close(1000, 'leaving page'); });
 
-if (!originalToken) {
+if (!ROOM_ID) {
+  window.location.replace(SPECTATOR ? 'spectate.html' : 'lobby.html');
+} else if (!SPECTATOR && !originalToken) {
   Net.goToLogin('Debes iniciar sesión para acceder al tablero.');
-} else if (!ROOM_ID) {
-  window.location.replace('lobby.html');
 } else {
   connect();
   loadProgress();

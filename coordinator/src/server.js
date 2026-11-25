@@ -16,11 +16,24 @@ const panel = require('./panel');
 const directory = require('./directory');
 const ngrok = require('./ngrok');
 const loop = require('./loop');
+const roomSvc = require('./rooms');
 
 function start() {
   const app = express();
   app.use(cors());
   app.use(express.json());
+  // Público (sin login): lista de salas para la vista de espectador
+  app.get('/rooms', (req, res) => {
+    res.json({
+      coordinatorId: config.COORDINATOR_ID,
+      rooms: roomSvc.roomsSummary().map(r => ({
+        id: r.id, name: r.name, emblem: r.emblem, host: r.host, status: r.status, phase: r.phase,
+        players: r.players.map(p => ({ username: p.username, skin: p.skin, color: p.color, bankrupt: p.bankrupt })),
+        maxPlayers: r.maxPlayers,
+        spectators: r.spectators.length + r.anonymousSpectators
+      }))
+    });
+  });
   panel.mount(app);
 
   const server = http.createServer(app);

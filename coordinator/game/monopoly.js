@@ -74,6 +74,7 @@ class MonopolyGame {
     this.pot        = 0;               // Fondo de Donaciones
     this.turn       = null;
     this.trade      = null;
+    this.auction    = null;            // subasta de los bienes de un jugador en bancarrota
     this.nextTrade  = 1;
     this.winnerId   = null;
     this.lastCard   = null;
@@ -741,15 +742,24 @@ class MonopolyGame {
     this.eliminate(p, null);
   }
 
-  // Elimina a un jugador. Sus bienes pasan al acreedor o vuelven al banco.
+  // Elimina a un jugador. Su dinero y cartas pasan al acreedor (o al banco) y
+  // sus propiedades se SUBASTAN entre los jugadores que siguen en pie. Si ya
+  // no queda nadie contra quien subastar (la partida termina), las propiedades
+  // pasan al acreedor o vuelven al banco.
   eliminate(p, creditor) {
+    const willAuction = this.activePlayers().filter(x => x !== p).length > 1;
     let buildingsValue = 0;
+    const toAuction = [];
     for (const [sid, prop] of Object.entries(this.properties)) {
       if (prop.ownerId !== p.id) continue;
       const space = SPACES[sid];
       if (prop.level > 0) buildingsValue += prop.level * Math.floor(space.houseCost * eco.BUILDING_SELL_RATE);
       prop.level = 0;
-      if (creditor) {
+      if (willAuction) {
+        prop.ownerId = null;
+        prop.mortgaged = false;
+        toAuction.push(space.id);
+      } else if (creditor) {
         prop.ownerId = creditor.id;
       } else {
         prop.ownerId = null;
@@ -785,6 +795,134 @@ class MonopolyGame {
       this.turn.debt = null;
       this.nextTurn();
     }
+    this.auctionDropPlayer(p);
+    if (toAuction.length) this.queueAuction(p, toAuction);
+  }
+
+  // ── Subasta de los bienes de un jugador en bancarrota ──────────────────────
+  // Una propiedad a la vez. Todos los jugadores activos pueden ofertar; cada
+  // oferta debe superar a la anterior (+AUCTION_STEP) y no puede exceder el
+  // dinero de quien oferta. La propiedad se adjudica cuando nadie más puede o
+  // quiere superar la oferta, o cuando vence el tiempo. Sin ofertas, vuelve al
+  // banco. Mientras dura la subasta el resto de acciones del juego se bloquea.
+  queueAuction(from, spaceIds) {
+    if (this.auction) {
+      this.auction.queue.push(...spaceIds);
+      this.auction.total += spaceIds.length;
+      this.addLog(`🔨 Se suman ${spaceIds.length} propiedad(es) de ${from.username} a la subasta`);
+      return;
+    }
+    this.auction = {
+      queue: spaceIds.slice(),
+      current: null, bid: 0, bidderId: null, passed: [], deadline: 0,
+      fromId: from.id, fromName: from.username,
+      total: spaceIds.length, sold: 0
+    };
+    this.addLog(`🔨 Subasta de los bienes de ${from.username}: ${spaceIds.length} propiedad(es)`);
+    this.nextAuctionItem();
+  }
+
+  nextAuctionItem() {
+    const a = this.auction;
+    while (a.queue.length) {
+      a.current = a.queue.shift();
+      a.bid = 0;
+      a.bidderId = null;
+      a.passed = [];
+      a.deadline = Date.now() + eco.AUCTION_OPEN_MS;
+      const space = SPACES[a.current];
+      this.addLog(`🔨 A subasta: ${space.name} (valor ${space.price})`);
+      if (this.auctionBidders().length) return;       // alguien puede ofertar
+      this.addLog(`Nadie puede ofertar por ${space.name}: vuelve al banco`);
+    }
+    this.auction = null;
+    this.addLog('🔨 Termina la subasta');
+    if (this.turn) this.turn.deadline = Date.now() + TURN_TIMEOUT_MS;   // el turno se reanuda completo
+  }
+
+  auctionMinBid() {
+    const a = this.auction;
+    return a.bidderId ? a.bid + eco.AUCTION_STEP : eco.AUCTION_MIN_BID;
+  }
+
+  // Quiénes todavía pueden superar la oferta actual
+  auctionBidders() {
+    const a = this.auction;
+    if (!a || a.current === null) return [];
+    const min = this.auctionMinBid();
+    return this.players.filter(p =>
+      !p.bankrupt && p.connected && p.id !== a.bidderId && !a.passed.includes(p.id) && p.money >= min);
+  }
+
+  requireAuction(id) {
+    this.requirePlaying();
+    const p = this.requirePlayer(id);
+    if (!this.auction || this.auction.current === null) throw new GameError('No hay una subasta en curso');
+    return p;
+  }
+
+  auctionBid(id, { amount } = {}) {
+    const p = this.requireAuction(id);
+    const a = this.auction;
+    const value = Number(amount);
+    if (!Number.isInteger(value)) throw new GameError('Oferta inválida');
+    if (p.id === a.bidderId) throw new GameError('Ya tienes la mejor oferta');
+    if (a.passed.includes(p.id)) throw new GameError('Ya pasaste en esta propiedad');
+    if (value < this.auctionMinBid()) throw new GameError(`La oferta mínima es ${this.auctionMinBid()}`);
+    if (value > p.money) throw new GameError(`No tienes ${value}`);
+    a.bid = value;
+    a.bidderId = p.id;
+    a.deadline = Date.now() + eco.AUCTION_BID_MS;
+    this.addLog(`${p.username} ofrece ${value} por ${SPACES[a.current].name}`);
+    this.auctionSettle();
+  }
+
+  auctionPass(id) {
+    const p = this.requireAuction(id);
+    const a = this.auction;
+    if (p.id === a.bidderId) throw new GameError('Tienes la mejor oferta');
+    if (!a.passed.includes(p.id)) a.passed.push(p.id);
+    this.auctionSettle();
+  }
+
+  // Cierra la propiedad actual si ya nadie puede superar la oferta
+  auctionSettle() {
+    if (this.auctionBidders().length === 0) this.closeAuctionItem();
+  }
+
+  closeAuctionItem() {
+    const a = this.auction;
+    const space = SPACES[a.current];
+    const winner = a.bidderId ? this.getPlayer(a.bidderId) : null;
+    if (winner && !winner.bankrupt && winner.money >= a.bid) {
+      winner.money -= a.bid;
+      this.properties[space.id].ownerId = winner.id;
+      a.sold++;
+      this.addLog(`🔨 ¡Vendida! ${space.name} es de ${winner.username} por ${a.bid}`);
+    } else {
+      this.addLog(`Nadie ofreció por ${space.name}: vuelve al banco`);
+    }
+    this.nextAuctionItem();
+  }
+
+  // Lo llama el anfitrión cuando vence el reloj de la subasta
+  auctionTimeout() {
+    const a = this.auction;
+    if (!a || a.current === null || Date.now() < a.deadline) return false;
+    this.closeAuctionItem();
+    return true;
+  }
+
+  // Un jugador sale de la partida con una subasta en marcha
+  auctionDropPlayer(p) {
+    const a = this.auction;
+    if (!a || a.current === null) return;
+    if (a.bidderId === p.id) {            // su oferta se anula y se reabre la propiedad
+      a.bid = 0;
+      a.bidderId = null;
+      a.deadline = Date.now() + eco.AUCTION_OPEN_MS;
+    }
+    this.auctionSettle();
   }
 
   // ── Conexión (lo llama el coordinador) ─────────────────────────────────────
@@ -801,6 +939,7 @@ class MonopolyGame {
   // Si tenía una compra pendiente se rechaza; si tenía una deuda sin pagar, quiebra.
   timeoutTurn(id) {
     if (this.phase !== 'playing' || !this.turn || this.turn.playerId !== String(id)) return false;
+    if (this.auction) return false;            // el reloj del turno está en pausa durante la subasta
     if (Date.now() < this.turn.deadline) return false;
     const p = this.current();
     this.addLog(`⏰ Se acabó el tiempo de ${p.username}`);
@@ -827,6 +966,7 @@ class MonopolyGame {
   // Salta el turno de un jugador desconectado
   skipDisconnected(id) {
     if (this.phase !== 'playing' || !this.turn || this.turn.playerId !== String(id)) return false;
+    if (this.auction) return false;
     const p = this.current();
     if (p.connected) return false;
     if (this.turn.debt) {
@@ -860,10 +1000,16 @@ class MonopolyGame {
       trade_respond:   () => this.respondTrade(userId, data),
       trade_cancel:    () => this.cancelTrade(userId, data),
       bankrupt:        () => this.declareBankruptcy(userId),
-      forfeit:         () => this.forfeit(userId)
+      forfeit:         () => this.forfeit(userId),
+      auction_bid:     () => this.auctionBid(userId, data),
+      auction_pass:    () => this.auctionPass(userId)
     };
     const fn = actions[action];
     if (!fn) throw new GameError(`Acción desconocida: ${action}`);
+    // Con una subasta en marcha solo se puede ofertar, pasar o rendirse
+    if (this.auction && !['auction_bid', 'auction_pass', 'forfeit', 'join', 'leave'].includes(action)) {
+      throw new GameError('Hay una subasta en curso: espera a que termine');
+    }
     fn();
     this.version++;
   }
@@ -896,6 +1042,18 @@ class MonopolyGame {
         debt: this.turn.debt && { total: this.turn.debt.total }
       },
       trade: this.trade,
+      auction: this.auction && {
+        current: this.auction.current,
+        bid: this.auction.bid,
+        bidderId: this.auction.bidderId,
+        passed: this.auction.passed,
+        deadline: this.auction.deadline,
+        minBid: this.auction.current === null ? 0 : this.auctionMinBid(),
+        remaining: this.auction.queue.length,
+        total: this.auction.total,
+        fromId: this.auction.fromId,
+        fromName: this.auction.fromName
+      },
       winnerId: this.winnerId,
       lastCard: this.lastCard,
       log: this.log
@@ -916,6 +1074,7 @@ class MonopolyGame {
       pot: this.pot,
       turn: this.turn,
       trade: this.trade,
+      auction: this.auction,
       nextTrade: this.nextTrade,
       winnerId: this.winnerId,
       lastCard: this.lastCard,
@@ -927,7 +1086,7 @@ class MonopolyGame {
 
   load(snapshot) {
     const data = JSON.parse(JSON.stringify(snapshot));
-    for (const key of ['phase', 'players', 'hostId', 'properties', 'decks', 'pot', 'turn', 'trade',
+    for (const key of ['phase', 'players', 'hostId', 'properties', 'decks', 'pot', 'turn', 'trade', 'auction',
                        'nextTrade', 'winnerId', 'lastCard', 'log', 'version', 'matchId']) {
       if (key in data) this[key] = data[key];
     }

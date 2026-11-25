@@ -12,7 +12,7 @@ const path = require('node:path');
 const { exec } = require('node:child_process');
 const express = require('express');
 const { config } = require('./config');
-const { clients, world, peers, rooms, directory, stats, events } = require('./state');
+const { clients, spectators, world, peers, rooms, directory, stats, events } = require('./state');
 const roomSvc = require('./rooms');
 const mesh = require('./mesh');
 const ngrok = require('./ngrok');
@@ -60,7 +60,8 @@ function panelData() {
       authUrl: config.AUTH_URL,
       uptime: Math.round((now - config.STARTED_AT) / 1000),
       leader: mesh.isLeader(),
-      localPlayers: clients.size
+      localPlayers: clients.size,
+      localSpectators: spectators.size
     },
     ngrok: ngrok.status,
     directory: { ok: directory.ok, error: directory.error, updatedMsAgo: directory.updatedAt ? now - directory.updatedAt : null },
@@ -88,6 +89,8 @@ function mount(app) {
       peerUrl: config.getPeerUrl(),
       uptime: Math.round((Date.now() - config.STARTED_AT) / 1000),
       connectedPlayers: clients.size,
+      spectators: spectators.size,
+      maxSpectators: config.MAX_SPECTATORS,
       peers: [...peers.entries()].map(([id, p]) => ({ coordinatorId: id, direction: p.direction, since: p.since })),
       rooms: roomSvc.roomsSummary(),
       replication: stats

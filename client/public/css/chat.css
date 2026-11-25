@@ -1,0 +1,77 @@
+/* ── Chat distribuido (lobby, tablero y espectador) ───────────────────────── */
+.chat { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+.chat-head { display: flex; align-items: center; gap: 0.5rem; }
+.chat-head h3 { flex: 1; margin: 0; font-family: var(--font-head); color: var(--gold-2); font-size: 0.95rem; }
+.chat-unread {
+  min-width: 1.4rem; padding: 0.05rem 0.4rem; border-radius: 999px; text-align: center;
+  background: var(--danger); color: #fff; font-size: 0.72rem; font-weight: 700;
+}
+.chat-unread[hidden] { display: none; }
+.chat-toggle {
+  background: transparent; border: 1px solid var(--border); color: var(--text-muted);
+  border-radius: 8px; width: 2rem; height: 1.8rem; cursor: pointer; font-size: 0.9rem;
+}
+.chat-toggle:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.chat-body { display: flex; flex-direction: column; gap: 0.5rem; }
+.chat-body[hidden] { display: none; }
+
+.chat-log {
+  list-style: none;
+  display: flex; flex-direction: column; gap: 0.35rem;
+  height: 15rem; min-height: 8rem; max-height: 40vh;
+  overflow-y: auto; overscroll-behavior: contain;
+  padding: 0.5rem;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--border-soft);
+}
+.chat-log:empty::before { content: 'Aún no hay mensajes. ¡Rompe el hielo!'; color: var(--text-muted); font-size: 0.85rem; font-style: italic; }
+.chat-msg {
+  align-self: flex-start;
+  max-width: 92%;
+  padding: 0.3rem 0.55rem;
+  border-radius: 10px 10px 10px 3px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-soft);
+  animation: chat-in 0.22s ease-out;
+}
+.chat-msg.mine {
+  align-self: flex-end;
+  border-radius: 10px 10px 3px 10px;
+  background: color-mix(in srgb, var(--gold) 14%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--gold) 40%, var(--border));
+}
+.chat-msg.late { animation: chat-late 1.2s ease-out; }
+@keyframes chat-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes chat-late { 0%, 40% { box-shadow: 0 0 0 2px var(--gold-2); } }
+.chat-meta { display: flex; align-items: center; gap: 0.4rem; font-size: 0.74rem; color: var(--text-muted); flex-wrap: wrap; }
+.chat-user { color: var(--gold-2); font-size: 0.82rem; }
+.chat-msg.mine .chat-user { color: var(--text); }
+.chat-time { margin-left: auto; font-variant-numeric: tabular-nums; }
+.chat-text { font-size: 0.9rem; color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
+
+.chat-form { display: grid; grid-template-columns: 1fr auto; gap: 0.4rem; align-items: center; }
+.chat-form[hidden] { display: none; }
+.chat-input {
+  min-width: 0; padding: 0.5rem 0.65rem; border-radius: 8px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  font: inherit; font-size: 0.92rem;
+}
+.chat-input:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
+.chat-send { width: auto; min-height: 36px; padding: 0.4rem 0.9rem; font-size: 0.85rem; }
+.chat-counter { grid-column: 1 / -1; justify-self: end; font-size: 0.7rem; color: var(--text-muted); font-variant-numeric: tabular-nums; margin-top: -0.2rem; }
+.chat-counter.near { color: var(--warning); }
+.chat-error {
+  padding: 0.4rem 0.6rem; border-radius: 8px; font-size: 0.82rem;
+  background: rgba(224, 90, 71, 0.14); border: 1px solid rgba(224, 90, 71, 0.5); color: #fbb7aa;
+}
+.chat-error[hidden] { display: none; }
+.chat-readonly {
+  padding: 0.45rem 0.65rem; border-radius: 8px; font-size: 0.82rem; text-align: center;
+  color: var(--text-muted); border: 1px dashed var(--border);
+}
+.chat-readonly[hidden] { display: none; }
+
+/* Chat de la plaza (lobby): junto a la lista de jugadores */
+.chat-card .chat-log { height: 18rem; }
+@media (prefers-reduced-motion: reduce) { .chat-msg, .chat-msg.late { animation: none; } }

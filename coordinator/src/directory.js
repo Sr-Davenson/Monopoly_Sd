@@ -26,7 +26,7 @@ async function cycle() {
         coordinatorId: config.COORDINATOR_ID,
         publicUrl: config.getPublicUrl(),
         peerUrl: config.getPeerUrl(),
-        connectedPlayers: clients.size,
+        connectedPlayers: clients.size,          // los espectadores NO cuentan para el balanceo
         lobbyPlayers: [...clients.values()].filter(c => c.view === 'canvas').length,
         uptime: Math.round((Date.now() - config.STARTED_AT) / 1000)
       }),

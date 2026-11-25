@@ -3,6 +3,7 @@
 //
 //   /connect?token=JWT&view=canvas            → lobby / plaza
 //   /connect?token=JWT&view=board&room=<id>   → tablero de una sala (jugar u observar)
+//   /connect?view=board&room=<id>&spectator=1 → ESPECTADOR anónimo (sin token, solo lectura)
 //
 // Si la sala está alojada en otro coordinador vivo, el WS se cierra con
 // 4010 "host:<id>" y el cliente se cambia a ese coordinador.
@@ -10,15 +11,18 @@
 // Rebalanceo: si el directorio lo ordena, jugadores del LOBBY se cierran con
 // 4011 "move:<id>" y el cliente se reconecta a ese coordinador.
 // ─────────────────────────────────────────────────────────────────────────────
+const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const { WebSocketServer, WebSocket } = require('ws');
 const { config } = require('./config');
-const { clients, world, rooms, log, send, sendRaw } = require('./state');
+const { clients, spectators, world, rooms, stats, log, send, sendRaw } = require('./state');
 const { MonopolyGame, GameError } = require('../game/monopoly');
 const { findTheme, findSkin, starterSkin, isUnlocked } = require('../game/themes');
 const broadcast = require('./broadcast');
 const mesh = require('./mesh');
 const roomSvc = require('./rooms');
+const chat = require('./chat');
+const { createFloodGuard } = require('./chat-core');
 
 const { COORDINATOR_ID } = config;
 const wss = new WebSocketServer({ noServer: true });
@@ -30,6 +34,7 @@ function rejectWith(req, socket, head, code, reason) {
 // Validación del JWT durante el HTTP Upgrade
 function handleUpgrade(req, socket, head) {
   const query  = new URL(req.url, 'http://localhost').searchParams;
+  if (query.get('spectator') === '1') return handleSpectatorUpgrade(req, socket, head, query);
   const token  = query.get('token');
   const view   = query.get('view') === 'board' ? 'board' : 'canvas';
   const roomId = view === 'board' ? query.get('room') : null;
@@ -135,6 +140,8 @@ wss.on('connection', (ws, payload, view, roomId, token) => {
   broadcast.markWorldDirty();
   broadcast.broadcastMesh();
 
+  chat.sendHistory(ws, view === 'board' ? chat.roomChannel(roomId) : 'global');
+
   // Tablero: estado de su sala. Si ya estaba en la partida, se reconecta.
   if (view === 'board') {
     const room = rooms.get(roomId);
@@ -162,7 +169,15 @@ wss.on('connection', (ws, payload, view, roomId, token) => {
     }
   }
 
+  // Guardia anti-inundación: un cliente que manda cientos de mensajes por
+  // segundo (DevTools, script) se desconecta.
+  const flooded = createFloodGuard(config.FLOOD_LIMIT);
   ws.on('message', (raw) => {
+    if (flooded()) {
+      stats.floodClosed++;
+      log('WS', `${username} (${userId}) inunda el socket (> ${config.FLOOD_LIMIT} msg/s). Cerrando.`);
+      return ws.close(4008, 'flood');
+    }
     let msg;
     try { msg = JSON.parse(raw); } catch { return send(ws, 'error', { message: 'json invalido' }); }
     const handler = handlers[msg.type];
@@ -255,6 +270,15 @@ const handlers = {
     }
   },
 
+  // ── Chat: { type: 'chat_send', data: { text } } ─────────────────────────────
+  // El canal lo decide el servidor según lo que el cliente está viendo
+  // (plaza → global, tablero → su sala): no se puede escribir en otra sala.
+  chat_send(ws, data, { userId }) {
+    const c = clients.get(userId);
+    if (!c || c.socket !== ws) return;
+    chat.handleSend(ws, c, data);
+  },
+
   get_game(ws, data, { userId }) {
     const room = roomOf(userId);
     if (room) send(ws, 'game_state', roomSvc.roomState(room));
@@ -313,6 +337,88 @@ const handlers = {
     }
   }
 };
+
+// ── Espectadores (sin autenticación, solo lectura) ───────────────────────────
+// Reciben el estado de la sala y su chat, pero NO tienen sesión: no entran a
+// `clients` (no cuentan para el balanceo de carga), no se replican por la mesh
+// y ningún mensaje suyo llega al motor del juego. Van al coordinador que ALOJA
+// la sala (el mismo redireccionamiento 4010 que los jugadores), así el trabajo
+// de enviarles el estado se hace donde ya vive la sala y se serializa una sola
+// vez por cambio para todos los viewers. Tope: MAX_SPECTATORS por coordinador.
+function handleSpectatorUpgrade(req, socket, head, query) {
+  const roomId = query.get('room');
+  const room = roomId && rooms.get(roomId);
+  if (!room) return rejectWith(req, socket, head, 4004, 'invalid room');
+  if (roomSvc.hostElsewhere(room)) {
+    log('WS', `Un espectador pidió "${room.name}": la atiende ${room.host}, se le redirige`);
+    return rejectWith(req, socket, head, roomSvc.REDIRECT_CODE, `host:${room.host}`);
+  }
+  if (spectators.size >= config.MAX_SPECTATORS) {
+    stats.spectatorsRefused++;
+    log('WS', `Espectador rechazado: tope de ${config.MAX_SPECTATORS} alcanzado`);
+    return rejectWith(req, socket, head, 4013, 'spectators full');
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => onSpectator(ws, roomId));
+}
+
+function onSpectator(ws, roomId) {
+  const id = `espectador-${crypto.randomBytes(4).toString('hex')}`;
+  const spec = { id, socket: ws, roomId, connectedAt: Date.now(), noticed: false };
+  spectators.set(id, spec);
+  stats.spectatorsAccepted++;
+  ws.on('error', (err) => log('WS', `Error de socket (${id}): ${err.message}`));
+
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+  const heartbeat = setInterval(() => {
+    if (!ws.isAlive) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  }, config.HEARTBEAT_MS);
+
+  const room = rooms.get(roomId);
+  log('WS', `Espectador ${id} en "${room.name}" | Espectadores locales: ${spectators.size}`);
+  sendRaw(ws, {
+    type: 'welcome',
+    you: { userId: null, username: 'Espectador', spectator: true },
+    world: { width: config.WORLD_WIDTH, height: config.WORLD_HEIGHT, playerRadius: config.PLAYER_RADIUS, tickRate: config.TICK_RATE },
+    coordinator: broadcast.meshInfo()
+  });
+  send(ws, 'game_config', MonopolyGame.config());
+  send(ws, 'game_state', roomSvc.roomState(room));
+  chat.sendHistory(ws, chat.roomChannel(roomId));
+  broadcast.markRoomsDirty();
+
+  // Solo se atienden ping y get_game. Cualquier otra cosa (intent, game_action,
+  // extras_update, chat_send…) se IGNORA sin tocar el estado ni lanzar errores.
+  const flooded = createFloodGuard(config.FLOOD_LIMIT);
+  ws.on('message', (raw) => {
+    if (flooded()) {
+      stats.floodClosed++;
+      return ws.close(4008, 'flood');
+    }
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+    if (msg && msg.type === 'ping') return send(ws, 'pong', { timestamp: Date.now() });
+    if (msg && msg.type === 'get_game') {
+      const r = rooms.get(spec.roomId);
+      if (r) send(ws, 'game_state', roomSvc.roomState(r));
+      return;
+    }
+    stats.spectatorIgnored++;
+    if (!spec.noticed) {        // un solo aviso por conexión, para no amplificar
+      spec.noticed = true;
+      log('WS', `${id} intentó enviar "${msg && msg.type}": ignorado (modo espectador)`);
+      send(ws, 'spectator_readonly', { message: 'Modo espectador: solo lectura. El servidor ignora tus mensajes.' });
+    }
+  });
+
+  ws.on('close', () => {
+    clearInterval(heartbeat);
+    spectators.delete(id);
+    broadcast.markRoomsDirty();
+  });
+}
 
 // ── Rebalanceo de carga ordenado por el directorio ───────────────────────────
 // Se mueven solo jugadores del lobby (vista canvas), empezando por los que

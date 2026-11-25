@@ -10,7 +10,7 @@
     "start:a": "node index.js --id coord-a --port 5001",
     "start:b": "node index.js --id coord-b --port 5002",
     "start:c": "node index.js --id coord-c --port 5003",
-    "test": "node --test game/monopoly.test.js",
+    "test": "node --test game/monopoly.test.js src/chat-core.test.js",
     "simulate": "node game/simulate.js"
   },
   "dependencies": {

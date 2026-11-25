@@ -80,6 +80,14 @@ const config = {
   ROOM_EMPTY_MS:     Number(process.env.ROOM_EMPTY_MS || 60000),    // sala sin nadie (sin iniciar) → se borra
   ROOM_ABANDON_MS:   Number(process.env.ROOM_ABANDON_MS || 90000),  // partida sin nadie conectado → se borra
   ORPHAN_GRACE_MS:   Number(process.env.ORPHAN_GRACE_MS || 2000),   // anfitrión caído → otro adopta la sala
+  // Espectadores (sin login): tope por coordinador para que no agoten recursos
+  MAX_SPECTATORS:    Number(process.env.MAX_SPECTATORS || 150),
+
+  // Chat
+  CHAT_RATE_CAPACITY: Number(process.env.CHAT_RATE_CAPACITY || 5),   // ráfaga permitida
+  CHAT_RATE_PER_SEC:  Number(process.env.CHAT_RATE_PER_SEC  || 1),   // ritmo sostenido
+  FLOOD_LIMIT:        Number(process.env.FLOOD_LIMIT || 60),         // mensajes WS por segundo antes de cortar
+
   ROOM_EMBLEMS:      ['galaxia', 'nave', 'yggdrasil', 'dragon', 'drakkar', 'martillo', 'babel', 'pluma'],
 
   STARTED_AT: Date.now()

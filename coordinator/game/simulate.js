@@ -24,6 +24,14 @@ function act(g, id, action, data) {
   }
 }
 
+// Los bots no ofertan: todos pasan y la propiedad vuelve al banco
+function settleAuctions(g) {
+  for (let guard = 0; g.auction && guard < 100; guard++) {
+    for (const q of g.activePlayers()) act(g, q.id, 'auction_pass');
+    if (g.auction) { g.auction.deadline = 0; g.auctionTimeout(); }
+  }
+}
+
 function botTurn(g, p, stats) {
   for (let guard = 0; guard < 200; guard++) {
     if (g.phase !== 'playing' || g.turn.playerId !== p.id) return;
@@ -96,7 +104,9 @@ function simulate(nPlayers) {
 
   while (g.phase === 'playing' && stats.turns < MAX_TURNS) {
     const before = g.activePlayers().length;
+    settleAuctions(g);
     botTurn(g, g.current(), stats);
+    settleAuctions(g);
     stats.turns++;
     if (g.activePlayers().length < before) stats.eliminations.push(stats.turns);
     if (stats.turns === 20 * nPlayers) {

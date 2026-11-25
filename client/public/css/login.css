@@ -13,3 +13,7 @@
 .google-btn-wrapper { display: flex; justify-content: center; align-items: center; min-height: 48px; }
 .google-status { color: var(--text-muted); font-size: 0.82rem; margin-top: 0.75rem; }
 .modal-overlay[hidden] { display: none; }
+
+.btn-ghost { background: transparent; color: var(--gold-2); border: 1px solid rgba(217, 180, 90, 0.5); }
+.btn-ghost:hover { background: rgba(217, 180, 90, 0.08); }
+.spectator-card { padding-block: 1rem; }

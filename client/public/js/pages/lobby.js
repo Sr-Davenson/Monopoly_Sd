@@ -18,6 +18,15 @@ let progress = null;
 let progressError = false;
 let leaving = false;
 
+// ── Chat de la plaza ────────────────────────────────────────────────────
+// El coordinador lo replica por la mesh: lo ven los jugadores de TODOS los coordinadores.
+const chat = Chat.create($('chat-card'), {
+  title: '💬 Chat de la plaza',
+  myId: () => myId,
+  send: (text) => !!conn && conn.send({ type: 'chat_send', data: { text } }),
+  themeOf: () => null
+});
+
 const STATUS_LABEL = { vacia: 'Vacía', sin_iniciar: 'Sin iniciar', en_curso: 'En curso', finalizada: 'Finalizada' };
 // Emblemas disponibles al crear una sala (el coordinador valida la lista)
 const ROOM_STYLE = {
@@ -95,7 +104,7 @@ function renderRooms() {
 
     const meta = el('div', { class: 'room-meta' },
       el('strong', {}, `${r.players.length}/${r.maxPlayers}`), ' jugadores · mínimo ', el('strong', {}, r.minPlayers), ' para iniciar',
-      r.spectators.length ? ` · ${r.spectators.length} observando` : '',
+      (r.spectators.length + (r.anonymousSpectators || 0)) ? ` · ${r.spectators.length + (r.anonymousSpectators || 0)} observando` : '',
       r.createdBy ? ` · creada por ${r.createdBy.username}` : ''
     );
 
@@ -225,8 +234,11 @@ function renderCollection() {
               el('div', { class: 'sk-name' }, sk.name, ok ? '' : ' 🔒'),
               el('div', { class: `rarity ${sk.rarity}` }, rarity ? rarity.label : sk.rarity),
               el('div', { class: 'sk-sub' }, sk.starter ? 'Ficha inicial · disponible' : ok ? `Desbloqueada · ${sk.unlock.text}` : `Misión: ${sk.unlock.text} (${have}/${sk.unlock.count})`),
-              !sk.starter && !ok ? el('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': sk.unlock.count, 'aria-valuenow': have },
-                el('span', { style: `width:${(have / sk.unlock.count) * 100}%` })) : ''
+              // Siempre hay barra (llena si ya está desbloqueada; invisible en la inicial) para que todas las filas midan igual
+              sk.starter
+                ? el('div', { class: 'progress placeholder', 'aria-hidden': 'true' })
+                : el('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': sk.unlock.count, 'aria-valuenow': have },
+                    el('span', { style: `width:${ok ? 100 : (have / sk.unlock.count) * 100}%` }))
             )
           );
         })
@@ -498,6 +510,15 @@ function onMessage(msg) {
     case 'room_error':
       $('create-room-btn').disabled = false;
       showCreateError(msg.data.message);
+      return;
+    case 'chat_history':
+      chat.setHistory(msg.data.messages, msg.data);
+      return;
+    case 'chat_message':
+      chat.add(msg.data.msg, msg.data.late);
+      return;
+    case 'chat_error':
+      chat.error(msg.data);
       return;
     case 'progress_changed':
       loadProgress();

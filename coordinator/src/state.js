@@ -8,6 +8,11 @@ const { config } = require('./config');
 // userId -> { userId, socket, username, provider, view, roomId, token, connectedAt }
 const clients = new Map();
 
+// Espectadores anónimos (sin login) de ESTE coordinador: id -> { id, socket, roomId, connectedAt }.
+// No están en `clients` ni en `world`: no cuentan para el balanceo de carga
+// ni se replican por la mesh (solo observan la sala que aloja este coordinador).
+const spectators = new Map();
+
 // Mundo replicado: TODOS los jugadores de la mesh (locales y remotos).
 // userId -> { userId, username, provider, view, roomId, coordinatorId, since,
 //             x, y, intent: {x,y}, extras }
@@ -22,7 +27,11 @@ const rooms = new Map();
 // Último listado del directorio (auth-service GET /coordinators)
 const directory = { ok: null, list: [], updatedAt: 0, error: null };
 
-const stats = { replicated: 0, received: 0, discardedOwnOrigin: 0 };
+const stats = {
+  replicated: 0, received: 0, discardedOwnOrigin: 0,
+  chatSent: 0, chatRejected: 0, chatReceived: 0,
+  spectatorsAccepted: 0, spectatorsRefused: 0, spectatorIgnored: 0, floodClosed: 0
+};
 
 // Eventos recientes para el panel del coordinador
 const events = [];
@@ -48,4 +57,4 @@ function localBroadcast(obj, filter = () => true) {
   }
 }
 
-module.exports = { clients, world, peers, rooms, directory, stats, events, log, send, sendRaw, localBroadcast };
+module.exports = { clients, spectators, world, peers, rooms, directory, stats, events, log, send, sendRaw, localBroadcast };

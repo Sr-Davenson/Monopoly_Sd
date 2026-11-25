@@ -9,7 +9,8 @@
 //
 // Uso: Sound.play('buy', 'tema_david')
 // Eventos: step, roll, turn, buy, build, pay, collect, card, jail, trade,
-//          tradeOk, tick, timeout, expel, win, achievement
+//          tradeOk, tick, timeout, expel, win, achievement,
+//          chatIn, chatOut (chat) · auction, bid, sold (subastas)
 // ─────────────────────────────────────────────────────────────────────────────
 (function () {
   const STORE_KEY = 'sound_muted';
@@ -217,14 +218,36 @@
       th.bell(0.95);
       melody(th, [7, 9, 10], 0.0, 1.0, 0.18); // acorde final
     },
+    // Chat: un "plin" corto con el instrumento de la temática (suave, no molesta)
+    chatIn: (th) => { th.note(th.scale[7], 0, 0.1, 0.14); th.note(th.scale[9], 0.09, 0.16, 0.12); },
+    chatOut: (th) => th.note(th.scale[4], 0, 0.08, 0.1),
+    // Subasta: aviso de apertura, oferta y martillazo de adjudicación
+    auction: (th) => { th.bell(0); th.bell(0.28); melody(th, [4, 2, 4, 7], 0.1, 0.18, 0.2); },
+    bid: (th) => melody(th, [5, 8], 0.07, 0.12, 0.22),
+    sold: (th) => {
+      tone({ type: 'square', freq: 220, to: 70, dur: 0.09, gain: 0.45, filter: 1200 });
+      noise({ dur: 0.07, gain: 0.35, type: 'lowpass', freq: 700 });
+      th.bell(0.18);
+      melody(th, [0, 4, 7], 0.08, 0.16, 0.2);
+    },
     achievement: (th) => {
       melody(th, [4, 7, 9, 10], 0.08, 0.2);
       [96, 100, 103, 108].forEach((m, k) => tone({ type: 'sine', freq: hz(m), at: 0.35 + k * 0.06, dur: 0.6, gain: 0.08 }));
     }
   };
 
+  // Los sonidos de chat se limitan para que una ráfaga de mensajes no sature
+  const lastAt = {};
+  const MIN_GAP = { chatIn: 350, chatOut: 150, bid: 120 };
+
   function play(event, themeId, arg) {
     if (muted) return;
+    const gap = MIN_GAP[event];
+    if (gap) {
+      const now = Date.now();
+      if (now - (lastAt[event] || 0) < gap) return;
+      lastAt[event] = now;
+    }
     const fn = EVENTS[event];
     if (!fn || !audio()) return;
     try { fn(THEMES[themeId] || THEMES[FALLBACK], arg); } catch (err) { console.warn('[SOUND]', err); }

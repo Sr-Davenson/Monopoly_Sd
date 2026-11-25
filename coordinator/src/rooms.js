@@ -19,10 +19,11 @@
 const crypto = require('node:crypto');
 const { WebSocket } = require('ws');
 const { config } = require('./config');
-const { clients, world, peers, rooms, directory, log, send, localBroadcast } = require('./state');
+const { clients, spectators, world, peers, rooms, directory, log, send, localBroadcast } = require('./state');
 const { MonopolyGame, GameError, RECONNECT_GRACE_MS } = require('../game/monopoly');
 const broadcast = require('./broadcast');
 const mesh = require('./mesh');
+const chat = require('./chat');
 
 const { COORDINATOR_ID } = config;
 const ROOM_ID_RE = /^sala-[a-z0-9-]{4,48}$/;
@@ -46,6 +47,7 @@ function newRoom(meta) {
     writer: meta.host,
     turnTimer: null,
     kickTimers: [],
+    auctionTimer: null,
     lifeTimer: null,
     orphanSince: null
   };
@@ -80,6 +82,7 @@ function createRoom(userId, username, data) {
 function deleteRoom(room, reason) {
   clearRoomTimers(room);
   rooms.delete(room.id);
+  chat.dropChannel(chat.roomChannel(room.id));
   tombstones.set(room.id, Date.now());
   log('ROOM', `Sala "${room.name}" (${room.id}) eliminada: ${reason}`);
   mesh.toPeers({ type: 'room_deleted', roomId: room.id });
@@ -93,6 +96,7 @@ function applyRemoteDelete(msg) {
   if (!room) return;
   clearRoomTimers(room);
   rooms.delete(room.id);
+  chat.dropChannel(chat.roomChannel(room.id));
   log('ROOM', `Sala "${room.name}" eliminada por ${msg.origin}`);
   closeViewers(room, 4004, 'room closed');
   broadcast.markRoomsDirty();
@@ -102,6 +106,7 @@ function closeViewers(room, code, reason) {
   for (const c of clients.values()) {
     if (c.view === 'board' && c.roomId === room.id) c.socket.close(code, reason);
   }
+  for (const s of spectators.values()) if (s.roomId === room.id) s.socket.close(code, reason);
 }
 
 // Las lápidas se olvidan tras 10 min
@@ -188,8 +193,12 @@ function applyRemoteRoom(msg) {
 
 function onRoomChanged(room) {
   const msg = JSON.stringify({ type: 'game_state', data: roomState(room) });
+  // El JSON se serializa UNA vez y se envía igual a jugadores y espectadores
   for (const c of clients.values()) {
     if (c.view === 'board' && c.roomId === room.id && c.socket.readyState === WebSocket.OPEN) c.socket.send(msg);
+  }
+  for (const s of spectators.values()) {
+    if (s.roomId === room.id && s.socket.readyState === WebSocket.OPEN) s.socket.send(msg);
   }
   enforceHost(room);
   broadcast.markRoomsDirty();
@@ -211,6 +220,9 @@ function enforceHost(room) {
       c.redirected = true;
       c.socket.close(REDIRECT_CODE, `host:${room.host}`);
     }
+  }
+  for (const s of spectators.values()) {
+    if (s.roomId === room.id) s.socket.close(REDIRECT_CODE, `host:${room.host}`);
   }
 }
 
@@ -269,7 +281,9 @@ function roomsSummary() {
         })),
         spectators: viewersOf(room)
           .filter(w => !inGame.has(w.userId))
-          .map(w => ({ userId: w.userId, username: w.username, coordinatorId: w.coordinatorId }))
+          .map(w => ({ userId: w.userId, username: w.username, coordinatorId: w.coordinatorId })),
+        // Espectadores anónimos: solo los conoce el coordinador que aloja la sala
+        anonymousSpectators: [...spectators.values()].filter(s => s.roomId === room.id).length
       };
     });
 }
@@ -288,6 +302,7 @@ function clearRoomTimers(room) {
   if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
   for (const t of room.kickTimers) clearTimeout(t);
   room.kickTimers = [];
+  if (room.auctionTimer) { clearTimeout(room.auctionTimer); room.auctionTimer = null; }
   if (room.lifeTimer) { clearTimeout(room.lifeTimer); room.lifeTimer = null; }
 }
 
@@ -300,7 +315,16 @@ function scheduleRoomTimers(room) {
   if (room.host !== COORDINATOR_ID) return;
   const g = room.game;
 
-  if (g.phase === 'playing' && g.turn) {
+  // Subasta de los bienes de un jugador en bancarrota: el reloj del turno se pausa.
+  if (g.phase === 'playing' && g.auction) {
+    const deadline = g.auction.deadline;
+    const current = g.auction.current;
+    room.auctionTimer = setTimeout(() => {
+      room.auctionTimer = null;
+      if (!g.auction || g.auction.current !== current || g.auction.deadline !== deadline) return;
+      if (g.auctionTimeout()) { g.version++; commitRoom(room); }
+    }, Math.max(0, deadline - Date.now()) + 50);
+  } else if (g.phase === 'playing' && g.turn) {
     // Tiempo del turno: al vencer se pasa al siguiente jugador.
     const turnId = g.turn.playerId;
     const deadline = g.turn.deadline || Date.now();
@@ -329,7 +353,7 @@ function scheduleRoomTimers(room) {
     room.lifeTimer = setTimeout(() => {
       room.lifeTimer = null;
       if (g.version !== version || !rooms.has(room.id)) return;
-      if (empty && viewersOf(room).length) return scheduleRoomTimers(room);   // alguien está mirando
+      if (empty && (viewersOf(room).length || [...spectators.values()].some(s => s.roomId === room.id))) return scheduleRoomTimers(room);   // alguien está mirando
       deleteRoom(room, empty ? 'quedó vacía' : 'partida abandonada');
     }, wait);
   }

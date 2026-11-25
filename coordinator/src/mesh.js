@@ -14,6 +14,7 @@ const { config } = require('./config');
 const { clients, world, peers, rooms, stats, log, sendRaw } = require('./state');
 const broadcast = require('./broadcast');
 const roomSvc = require('./rooms');
+const chat = require('./chat');
 
 const { COORDINATOR_ID } = config;
 const connecting = new Map();   // id -> { url, since, lastError }
@@ -77,6 +78,7 @@ function registerPeer(id, ws, direction) {
     if (w && w.coordinatorId === COORDINATOR_ID) toPeer(ws, playerJoinedMessage(w));
   }
   for (const room of rooms.values()) toPeer(ws, roomSvc.roomStateMessage(room));
+  chat.syncTo(ws);   // historial del chat (el que ya tiene un mensaje lo ignora)
 
   broadcast.broadcastMesh();
   roomSvc.scheduleAllRoomTimers();
@@ -338,6 +340,12 @@ function handlePeerMessage(fromId, msg) {
 
     case 'room_deleted':
       return roomSvc.applyRemoteDelete(msg);
+
+    case 'chat_replicate':
+      return chat.applyRemote(msg.origin, msg);
+
+    case 'chat_sync':
+      return chat.applySync(msg.origin, msg);
 
     default:
       log('MESH', `Mensaje desconocido de ${fromId}: ${msg.type}`);

@@ -9,17 +9,20 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700&family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@500;700;900&display=swap" />
   <link rel="stylesheet" href="css/styles.css" />
   <link rel="stylesheet" href="css/game.css" />
+  <link rel="stylesheet" href="css/chat.css" />
   <script src="js/config.js"></script>
   <script src="js/lib/dom.js"></script>
   <script src="js/lib/tokens.js"></script>
   <script src="js/lib/net.js"></script>
   <script src="js/lib/sounds.js"></script>
+  <script src="js/lib/chat.js"></script>
 </head>
 <body class="game-body">
   <header class="game-header">
     <div class="game-header-left">
       <a href="lobby.html" class="game-title" title="Volver al lobby">Cuatro Mundos</a>
       <span class="room-chip" id="room-name">Sala</span>
+      <span id="spectator-badge" class="spectator-badge" hidden>👁 MODO ESPECTADOR</span>
       <span id="conn-status" class="pill conn-status" data-state="connecting"><span class="status-dot"></span><span id="conn-text">Conectando...</span></span>
       <span class="pill coord" title="Coordinador asignado por el auth-service">Coordinador: <strong id="coord-id">—</strong></span>
     </div>
@@ -28,10 +31,15 @@
       <span>Jugador: <strong id="me-name">...</strong></span>
       <span id="me-money" class="money-pill" hidden></span>
       <button id="sound-btn" class="btn btn-small btn-ghost sound-btn" type="button" aria-pressed="true" title="Activar o silenciar sonidos">🔊</button>
-      <a href="lobby.html" class="btn btn-small btn-ghost">← Lobby</a>
+      <a href="lobby.html" id="back-link" class="btn btn-small btn-ghost">← Lobby</a>
     </div>
   </header>
   <div id="lost-banner" class="lost-banner" role="status" hidden></div>
+  <div id="spectator-banner" class="spectator-banner" role="status" hidden>
+    <strong>👁 MODO ESPECTADOR</strong>
+    <span>Estás mirando esta partida sin participar: no tienes controles y el servidor ignora cualquier acción que envíes. Puedes leer el chat de la sala.</span>
+    <a href="login.html" class="btn btn-small btn-ghost">Iniciar sesión para jugar</a>
+  </div>
 
   <!-- ── Sala de espera: temática y ficha (solo antes de iniciar) ──────────── -->
   <section id="waiting-room" class="waiting-room" hidden>
@@ -72,6 +80,7 @@
             <div id="die-1" class="die">–</div>
             <div id="die-2" class="die">–</div>
           </div>
+          <div id="auction" class="auction" aria-live="polite" hidden></div>
           <div id="actions" class="actions"></div>
           <div id="pot" class="pot"></div>
           <div id="last-card" class="last-card" hidden></div>
@@ -85,17 +94,19 @@
         <ul id="players" class="players"></ul>
       </div>
 
+      <div class="panel chat-panel" id="chat-panel"></div>
+
       <div class="panel">
         <h3>Casilla seleccionada</h3>
         <div id="space-detail" class="space-detail text-muted small">Haz clic en una casilla del tablero.</div>
       </div>
 
-      <div class="panel">
+      <div class="panel only-player">
         <h3>Mis propiedades</h3>
         <div id="my-props" class="my-props text-muted small">Sin propiedades.</div>
       </div>
 
-      <div class="panel">
+      <div class="panel only-player">
         <h3>Intercambios</h3>
         <div id="trade-summary" class="trade-summary small"></div>
       </div>

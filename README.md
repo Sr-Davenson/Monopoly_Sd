@@ -322,3 +322,53 @@ También se corrió una prueba de punta a punta (auth + 2 coordinadores + client
 - **Enlace mesh**: solo el id menor inicia la conexión. Si su túnel funciona pero el del otro no, el enlace no se forma. El panel lo muestra como `esperando` o `sin enlace` con el último error.
 - **Desbalance por salas**: el lobby se reparte por igual, pero los jugadores de una sala se concentran en su anfitrión. Es la regla pedida.
 - El estado vive en memoria: mientras quede **al menos un coordinador vivo**, las salas sobreviven. El progreso de misiones persiste en SQLite.
+
+---
+
+## 13. Tracks del examen final
+
+**Track principal: chat distribuido.** **Track secundario: modo espectador.** Se eligieron dos tracks porque el espectador comparte con el chat la misma infraestructura (el canal de la sala), y el chat sin el espectador no mostraría el caso "lector que no escribe".
+
+### 13.1 Chat distribuido (principal)
+
+- **Canales**: `global` (plaza del lobby, visible desde todos los coordinadores) y `room:<id>` (chat de cada sala). El cliente no elige el canal: el servidor lo deduce de lo que está viendo, así que nadie puede escribir en una sala ajena.
+- **Flujo**: `chat_send` → el coordinador local valida, sella con su reloj, guarda en su historial, entrega a sus clientes y replica por la mesh con `chat_replicate`. Los pares **re-validan** (no confían en el otro coordinador), actualizan su reloj y entregan a los suyos. Nadie retransmite lo recibido, así que no hay bucles. Al enlazarse dos coordinadores se intercambian los historiales (`chat_sync`); los duplicados se descartan por id `origin#seq`.
+- **Orden (la parte difícil)**: los relojes de pared pueden estar desfasados, así que se usa un **reloj de Lamport** por coordinador. El orden total es `(lc, origin, seq)`. Si Alice (coord-A) y Bob (coord-B) escriben a la vez, ambos mensajes tienen el mismo `lc` y el desempate por id del coordinador es arbitrario pero **igual en todos**: Charlie, en coord-C, ve la misma conversación que los demás. Si un mensaje llega tarde y le toca ir antes de otros ya mostrados, el cliente lo **inserta en su lugar** con un destello. La prueba de punta a punta comprueba que 12 mensajes enviados a la vez desde dos coordinadores quedan en el mismo orden en los tres clientes.
+- **Validación**: máximo 200 caracteres (`CHAT_MAX_LEN`), se eliminan caracteres de control e invisibles (RTL, ancho cero), se colapsan espacios y se rechazan mensajes vacíos. El **cliente escapa HTML** porque siempre usa `textContent` (`<img onerror=…>` se ve como texto).
+- **Rate limiting**: cubeta de fichas por usuario (ráfaga de 5, ritmo sostenido de 1 por segundo). Quien insiste mientras está limitado acumula faltas y queda **silenciado 15 s** (`chat_error: rate_limited | muted`, con `retryMs`). Además hay una guardia por socket: más de 60 mensajes WS por segundo (de cualquier tipo) cierra la conexión con `4008`. En la prueba, 40 mensajes seguidos dejan pasar 5, y 1000 `ping` en un segundo cortan el socket.
+- **Persistencia mínima**: cada coordinador guarda en memoria los últimos 50 mensajes por canal (`CHAT_HISTORY`). El cliente que se conecta recibe `chat_history`; si cambia de coordinador por rebalanceo o failover, recibe el historial del nuevo, que ya lo tiene replicado. Los canales de sala se borran con la sala.
+- **Sonido**: cada mensaje recibido y enviado suena con el instrumento de la temática (`chatIn`, `chatOut`), con un intervalo mínimo para que una ráfaga no sature.
+- **Límites conocidos**: el historial es solo en memoria (si caen todos los coordinadores se pierde). El orden es consistencia eventual: un mensaje con retraso de red puede aparecer insertado más arriba. Un mensaje enviado justo cuando se corta el enlace con un par puede no llegar a ese par hasta el siguiente `chat_sync`.
+
+### 13.2 Modo espectador (secundario)
+
+- **Entrada pública**: `spectate.html` (enlace en el login y en el lobby) lista las salas con `GET <coordinador>/rooms` (público) y abre `game.html?sala=…&espectador=1`. El WS es `/connect?view=board&room=<id>&spectator=1` **sin token**.
+- **Qué recibe**: `welcome`, la configuración, `game_state` en cada cambio y el chat de la sala. La pantalla es la del tablero con una insignia y una franja **MODO ESPECTADOR**, sin controles de jugador (intercambios, propiedades, elegir ficha).
+- **Solo lectura, validado en el servidor**: los espectadores usan un manejador aparte que solo atiende `ping` y `get_game`. `intent`, `game_action`, `extras_update` y `chat_send` se **ignoran** sin tocar el estado ni lanzar errores (un único aviso `spectator_readonly` por conexión). Desde DevTools, `conn.send({type:'intent', intent:{dir:{x:1,y:0}}})` no tiene efecto.
+- **No cuentan para el balanceo**: viven en un mapa propio (`spectators`), no en `clients`. El heartbeat reporta solo los jugadores, y `/status` y el panel muestran los espectadores aparte. No se replican por la mesh.
+- **Costo y justificación**: un coordinador con 100 jugadores y 1000 espectadores tiene que enviar el estado a 1100. Decisiones:
+  1. Los espectadores van al coordinador que **aloja** la sala (redirección `4010`, igual que los jugadores). El trabajo se hace donde ya vive la sala y no hace falta replicar nada.
+  2. El estado se serializa **una sola vez** por cambio y se envía el mismo texto a jugadores y espectadores. Se envía solo cuando cambia (no a 20 Hz).
+  3. **Tope por coordinador** (`MAX_SPECTATORS`, 150 por defecto): el excedente recibe `4013 spectators full`.
+  4. Guardia anti-inundación y ping/pong para sacar conexiones muertas.
+
+  No se hizo un coordinador exclusivo de espectadores porque complicaría la mesh sin ganar nada con este volumen. Atajo documentado: el contador de espectadores anónimos solo lo conoce el anfitrión de la sala.
+
+### 13.3 Subasta de bienes en bancarrota
+
+Cuando un jugador queda en bancarrota (deuda, rendición, tiempo agotado o desconexión de más de 30 s) y siguen quedando **al menos 2 jugadores**, sus propiedades se **subastan una por una**; el dinero y las cartas de salida pasan al acreedor, como antes. Si la partida termina con esa baja, no hay subasta.
+
+- Pueden ofertar todos los jugadores activos y conectados. Oferta mínima Đ10; cada oferta debe superar a la anterior en Đ10 y no puede exceder el dinero de quien oferta. Se puede **pasar** (definitivo para esa propiedad).
+- La propiedad se adjudica cuando nadie más puede o quiere superar la oferta, o cuando vence el reloj (20 s para la primera oferta, 10 s tras cada nueva; `AUCTION_OPEN_MS` y `AUCTION_BID_MS`). Sin ofertas, vuelve al banco.
+- Es **autoritativa y replicada**: el estado de la subasta va dentro del estado de la sala. El reloj lo corre el anfitrión y, si cae, el nuevo anfitrión lo reprograma al adoptar la sala.
+- Durante la subasta el reloj del turno queda en pausa y el resto de acciones se bloquea; al terminar, el turno se reanuda con el tiempo completo.
+
+### 13.4 Cómo demostrarlo
+
+```bash
+cd coordinator && npm test      # 34 pruebas: motor, subastas y núcleo del chat
+```
+
+1. **Chat**: tres usuarios en tres coordinadores abren el lobby y escriben a la vez. Todos ven el mismo orden. Con una ráfaga de mensajes aparece *"Vas muy rápido"* y luego *"Silenciado"*.
+2. **Espectador**: pestaña de jugador y pestaña anónima en `spectate.html` → *Observar*. La del espectador ve moverse al jugador y leer el chat, pero no escribe. Desde su consola, `conn.send({type:'game_action', data:{action:'roll'}})` no hace nada.
+3. **Subasta**: en una partida de 3 o más, un jugador con propiedades pulsa *Rendirse*; aparece el panel de subasta para todos, incluidos los espectadores.

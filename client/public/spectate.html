@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cuatro Mundos — Modo espectador</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700&family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@500;700;900&display=swap" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/lobby.css" />
+  <link rel="stylesheet" href="css/chat.css" />
+  <script src="js/config.js"></script>
+  <script src="js/lib/dom.js"></script>
+  <script src="js/lib/tokens.js"></script>
+  <script src="js/lib/net.js"></script>
+</head>
+<body>
+  <div class="container lobby">
+    <header class="header">
+      <div class="game-logo">
+        <span class="kicker">Monopoly SD · Modo espectador</span>
+        <h1>Cuatro Mundos</h1>
+        <div class="tagline">
+          <span class="t-galaxy">Galaxias</span><span class="sep">·</span><span class="t-fantasy">Hechizos</span><span class="sep">·</span><span class="t-viking">Runas</span><span class="sep">·</span><span class="t-letters">Letras</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="card status-card">
+      <div class="top-bar">
+        <div class="user-badge">
+          <span class="spectator-badge">👁 MODO ESPECTADOR</span>
+          <span class="text-muted small">Sin iniciar sesión · solo lectura</span>
+        </div>
+        <div class="status-right">
+          <span class="pill coord">Consultando: <strong id="coord-id">—</strong></span>
+          <a href="login.html" class="btn btn-ghost btn-small">Iniciar sesión para jugar</a>
+        </div>
+      </div>
+      <div id="lost-banner" class="lost-banner" role="status" hidden></div>
+    </section>
+
+    <h2 class="section-title">Partidas que puedes mirar <small>Elige una sala: verás el tablero y el chat en tiempo real, pero no podrás jugar ni escribir</small></h2>
+    <div id="rooms" class="rooms-grid" aria-live="polite"><p class="text-muted">Pidiendo un coordinador al auth-service…</p></div>
+  </div>
+  <script src="js/pages/spectate.js"></script>
+</body>
+</html>

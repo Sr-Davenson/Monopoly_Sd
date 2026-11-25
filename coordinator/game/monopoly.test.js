@@ -272,3 +272,75 @@ test('desconectado más de 30 s queda fuera; si vuelve antes no', () => {
   assert.equal(g.phase, 'finished');
   assert.equal(g.winnerId, a.id);
 });
+
+// ── Subasta de bienes en bancarrota ──────────────────────────────────────────
+test('subasta: al quebrar con 3+ jugadores sus propiedades se subastan una a una', () => {
+  const { g, a, b } = newGame(3);
+  const c = g.players[2];
+  g.properties[1].ownerId = b.id;
+  g.properties[3].ownerId = b.id;
+  b.money = 500;
+  g.handle(b.id, '', 'forfeit');
+  assert.ok(b.bankrupt);
+  assert.ok(g.auction, 'se abrió la subasta');
+  assert.equal(g.properties[1].ownerId, null);
+  assert.equal(g.auction.current, 1);
+  assert.equal(g.auction.total, 2);
+
+  // durante la subasta el resto del juego se bloquea
+  assert.throws(() => g.handle(g.turn.playerId, '', 'roll'), /subasta/);
+
+  assert.throws(() => g.handle(a.id, '', 'auction_bid', { amount: 5 }), /mínima/);
+  g.handle(a.id, '', 'auction_bid', { amount: 60 });
+  assert.throws(() => g.handle(a.id, '', 'auction_bid', { amount: 100 }), /mejor oferta/);
+  assert.throws(() => g.handle(c.id, '', 'auction_bid', { amount: 60 }), /mínima/);
+  assert.throws(() => g.handle(c.id, '', 'auction_bid', { amount: c.money + 1 }), /No tienes/);
+  g.handle(c.id, '', 'auction_bid', { amount: 70 });
+  g.handle(a.id, '', 'auction_pass');
+  // a pasó y c va ganando: nadie más puede superar → se adjudica y sigue la siguiente
+  assert.equal(g.properties[1].ownerId, c.id);
+  assert.equal(c.money, eco.STARTING_MONEY - 70);
+  assert.equal(g.auction.current, 3);
+
+  // nadie oferta por la segunda: vence el reloj y vuelve al banco
+  g.auction.deadline = Date.now() - 1;
+  assert.equal(g.auctionTimeout(), true);
+  assert.equal(g.properties[3].ownerId, null);
+  assert.equal(g.auction, null);
+  assert.ok(g.turn.deadline > Date.now(), 'el turno se reanuda con tiempo completo');
+
+});
+
+test('subasta: con solo 2 jugadores no hay subasta (la partida termina)', () => {
+  const { g, a, b } = newGame(2);
+  g.properties[1].ownerId = b.id;
+  g.handle(b.id, '', 'forfeit');
+  assert.equal(g.phase, 'finished');
+  assert.equal(g.auction, null);
+  assert.equal(g.properties[1].ownerId, null);
+  assert.equal(g.winnerId, a.id);
+});
+
+test('subasta: si quien va ganando se rinde, la propiedad se reabre', () => {
+  const { g, a, b } = newGame(4);
+  const c = g.players[2];
+  g.properties[1].ownerId = b.id;
+  g.handle(b.id, '', 'forfeit');
+  g.handle(a.id, '', 'auction_bid', { amount: 100 });
+  g.handle(a.id, '', 'forfeit');
+  assert.ok(a.bankrupt);
+  assert.ok(g.auction || g.properties[1].ownerId === null);
+  assert.equal(g.properties[1].ownerId, null);
+  assert.ok(c);
+});
+
+test('subasta: serialize/load la conserva', () => {
+  const { g, a, b } = newGame(3);
+  g.properties[1].ownerId = b.id;
+  g.handle(b.id, '', 'forfeit');
+  g.handle(a.id, '', 'auction_bid', { amount: 40 });
+  const copy = new MonopolyGame({ rng: scriptedRng() });
+  copy.load(g.serialize());
+  assert.deepEqual(copy.toJSON().auction, g.toJSON().auction);
+  assert.equal(copy.toJSON().auction.bid, 40);
+});
